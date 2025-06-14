@@ -1,0 +1,21 @@
+================================================================================
+FOREX PREDICTION SYSTEM - PERFORMANCE SUMMARY
+================================================================================
+Generated: 2025-06-12 01:34:25
+
+MODEL PERFORMANCE:
+----------------------------------------
+Accuracy: 0.6563
+Precision: 0.6774
+Recall: 0.8963
+F1-Score: 0.7716
+
+TRADING STRATEGY PERFORMANCE:
+----------------------------------------
+Strategy             Return     Win Rate   Sharpe     Trades  
+--------------------------------------------------------------------
+CNN-LSTM Conservative 0.0062     0.1301     2.20       707     
+CNN-LSTM Moderate    0.0033     0.1751     1.16       788     
+CNN-LSTM Aggressive  -0.0066    0.2969     -1.08      1034    
+Buy and Hold         -0.0744    0.0000     0.00       1       
+Random               0.0014     0.3800     0.02       50      

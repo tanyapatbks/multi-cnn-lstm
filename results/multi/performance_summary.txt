@@ -1,0 +1,24 @@
+================================================================================
+FOREX PREDICTION SYSTEM - PERFORMANCE SUMMARY (MULTI)
+================================================================================
+Generated: 2025-06-13 23:19:14
+Model Type: multi
+Training Period: 2018-12-01 to 2020-11-30
+Validation Period: 2020-12-01 to 2020-12-31
+Test Period: 2021-01-01 to 2021-01-31
+
+MODEL PERFORMANCE:
+----------------------------------------
+Accuracy: 0.6963
+Precision: 0.7093
+Recall: 0.9433
+F1-Score: 0.8097
+
+TRADING STRATEGY PERFORMANCE:
+----------------------------------------
+Strategy                  Return%    Win Rate   Sharpe     Trades   Max DD%   
+-----------------------------------------------------------------------------------
+Multi-Model CNN-LSTM      2.35       0.3333     0.00       87       3.73      
+Buy & Hold                33.43      1.0000     0.00       1        0.00      
+RSI-based Trading         -8.04      0.6000     0.00       15       8.04      
+MACD-based Trading        -10.15     0.3415     0.00       41       10.15     
