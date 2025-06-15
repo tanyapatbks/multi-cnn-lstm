@@ -1,24 +1,28 @@
 ================================================================================
 FOREX PREDICTION SYSTEM - PERFORMANCE SUMMARY (USDJPY)
 ================================================================================
-Generated: 2025-06-13 23:42:23
+Generated: 2025-06-14 23:59:44
 Model Type: USDJPY
-Training Period: 2018-12-01 to 2020-11-30
-Validation Period: 2020-12-01 to 2020-12-31
-Test Period: 2021-01-01 to 2021-01-31
 
 MODEL PERFORMANCE:
 ----------------------------------------
-Accuracy: 0.6644
-Precision: 0.4815
-Recall: 0.1632
-F1-Score: 0.2437
+Accuracy: 0.6394
+Precision: 0.4662
+Recall: 0.6067
+F1 Score: 0.5273
+Auc Roc: 0.6993
+Auc Pr: 0.4640
+Log Loss: 0.5522
+Directional Accuracy: 0.6394
+Mcc: 0.2493
 
 TRADING STRATEGY PERFORMANCE:
 ----------------------------------------
 Strategy                  Return%    Win Rate   Sharpe     Trades   Max DD%   
 -----------------------------------------------------------------------------------
-USDJPY CNN-LSTM           -107.68    0.0536     0.00       56       107.68    
-Buy & Hold                -1042.00   0.0000     0.00       1        1042.00   
-RSI-based Trading         695.50     0.6818     0.00       22       18.49     
-MACD-based Trading        -100.47    0.2432     0.00       37       132.46    
+RSI-based Trading         6.32       0.6818     31.93      22       1.52      
+MACD-based Trading        2.88       0.4324     7.84       37       4.43      
+USDJPY CNN-LSTM Conservative 0.64       0.0943     4.88       53       1.32      
+USDJPY CNN-LSTM Aggressive 0.25       0.4414     2.36       145      0.52      
+USDJPY CNN-LSTM Moderate  0.10       0.2471     0.48       85       2.71      
+Buy & Hold                -9.47      0.0000     0.00       1        9.47      
