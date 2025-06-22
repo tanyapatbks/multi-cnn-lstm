@@ -1,0 +1,6 @@
+﻿Strategy,Total_Return_%,Sharpe_Ratio,Win_Rate_%,Max_Drawdown_%,Total_Trades,Avg_Return_Per_Trade_%,Avg_Holding_Hours,Avg_Leverage
+MULTI-CNN-LSTM-Moderate (GBPUSD),9.05065660264128e+20,-0.377,9.52,0,63,-0.05,2.87,1.0
+Multi-CNN-LSTM-Moderate (GBPUSD),9.05065660264128e+20,-0.377,9.52,0,63,-0.05,2.87,1.0
+RSI Based (GBPUSD),27054029136522.36,-0.196,42.11,0,38,-0.04,2.16,1.0
+MACD Based (GBPUSD),215712131354.72,0.727,70.97,0,31,0.08,1.48,1.0
+Buy & Hold (GBPUSD),99.97,0.0,0.0,0,1,-0.01,1.0,1.0

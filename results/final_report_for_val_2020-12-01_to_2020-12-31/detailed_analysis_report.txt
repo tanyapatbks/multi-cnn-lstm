@@ -1,0 +1,41 @@
+================================================================================
+FOREX CNN-LSTM PERFORMANCE ANALYSIS REPORT
+================================================================================
+
+📊 OVERALL STATISTICS:
+Total Strategies Evaluated: 27
+Currencies: EURUSD, GBPUSD, USDJPY
+Model Families: Multi-CNN-LSTM, Single-CNN-LSTM, Baseline
+
+🏆 TOP 5 PERFORMERS (by Total Return):
+  24. MACD-based (GBPUSD) - 7.02%
+  19. Buy & Hold (EURUSD) - 3.63%
+  22. Buy & Hold (GBPUSD) - 3.00%
+  13. Single-CNN-LSTM-Conservative (GBPUSD) - 1.86%
+  27. MACD-based (USDJPY) - 0.93%
+
+🎯 THRESHOLD EFFECTIVENESS ANALYSIS:
+  Conservative:
+    Average Return: -0.98%
+    Average Sharpe: -2.83
+    Success Rate: 33.3%
+    Consistency (σ): 2.33
+  Moderate:
+    Average Return: -0.89%
+    Average Sharpe: -3.25
+    Success Rate: 16.7%
+    Consistency (σ): 0.77
+  Aggressive:
+    Average Return: -0.35%
+    Average Sharpe: -0.99
+    Success Rate: 33.3%
+    Consistency (σ): 0.87
+
+🔄 MULTI vs SINGLE CURRENCY COMPARISON:
+  Multi-Currency Average Return: -1.40%
+  Single-Currency Average Return: -0.07%
+  Advantage to Multi-Currency: -1.33%
+
+⚠️ RISK ANALYSIS:
+  High-return strategies (>5%) average drawdown: 2.12%
+================================================================================

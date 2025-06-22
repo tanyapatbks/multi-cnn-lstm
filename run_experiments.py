@@ -1,403 +1,373 @@
 """
-Experiment Runner for Master's Thesis
-Runs 12 monthly loops as per Advisor's requirements
-
-Loop 1: Train Dec 2018 - Nov 2020 / Validate Dec 2020 / Test Jan 2021
-Loop 2: Train Jan 2019 - Dec 2020 / Validate Jan 2021 / Test Feb 2021
-... and so on for 12 loops
+Main script to run the complete 12-loop rolling window experiment
+with test set evaluation for Multi-Currency CNN-LSTM Forex Prediction System
 """
-
+import argparse
+import warnings
 import os
 import sys
-import pandas as pd
-from datetime import datetime, timedelta
-import json
+import time
+from datetime import datetime
+import matplotlib
 
-def generate_date_ranges():
-    """Generate 12 sets of date ranges for training/validation/testing"""
-    date_ranges = []
-    
-    # Starting points
-    train_start = datetime(2018, 12, 1)
-    
-    for loop in range(12):
-        # Calculate dates for this loop
-        loop_train_start = train_start + timedelta(days=30*loop)  # Approximate monthly shift
-        loop_train_end = loop_train_start + timedelta(days=730)  # ~2 years
-        
-        # Validation is the next month after training
-        loop_val_start = loop_train_end + timedelta(days=1)
-        loop_val_end = loop_val_start + timedelta(days=30)  # 1 month validation
-        
-        # Test is the next month after validation
-        loop_test_start = loop_val_end + timedelta(days=1)
-        loop_test_end = loop_test_start + timedelta(days=30)  # 1 month test
-        
-        # Adjust to exact month boundaries
-        loop_config = {
-            'loop': loop + 1,
-            'train_start': loop_train_start.strftime('%Y-%m-01'),
-            'train_end': loop_train_end.strftime('%Y-%m-%d'),
-            'val_start': loop_val_start.strftime('%Y-%m-01'),
-            'val_end': loop_val_end.strftime('%Y-%m-%d'),
-            'test_start': loop_test_start.strftime('%Y-%m-01'),
-            'test_end': loop_test_end.strftime('%Y-%m-%d')
-        }
-        
-        # Manual adjustment for exact dates as per requirement
-        if loop == 0:  # Loop 1
-            loop_config = {
-                'loop': 1,
-                'train_start': '2018-12-01',
-                'train_end': '2020-11-30',
-                'val_start': '2020-12-01',
-                'val_end': '2020-12-31',
-                'test_start': '2021-01-01',
-                'test_end': '2021-01-31'
-            }
-        elif loop == 1:  # Loop 2
-            loop_config = {
-                'loop': 2,
-                'train_start': '2019-01-01',
-                'train_end': '2020-12-31',
-                'val_start': '2021-01-01',
-                'val_end': '2021-01-31',
-                'test_start': '2021-02-01',
-                'test_end': '2021-02-28'
-            }
-        elif loop == 2:  # Loop 3
-            loop_config = {
-                'loop': 3,
-                'train_start': '2019-02-01',
-                'train_end': '2021-01-31',
-                'val_start': '2021-02-01',
-                'val_end': '2021-02-28',
-                'test_start': '2021-03-01',
-                'test_end': '2021-03-31'
-            }
-        elif loop == 3:  # Loop 4
-            loop_config = {
-                'loop': 4,
-                'train_start': '2019-03-01',
-                'train_end': '2021-02-28',
-                'val_start': '2021-03-01',
-                'val_end': '2021-03-31',
-                'test_start': '2021-04-01',
-                'test_end': '2021-04-30'
-            }
-        elif loop == 4:  # Loop 5
-            loop_config = {
-                'loop': 5,
-                'train_start': '2019-04-01',
-                'train_end': '2021-03-31',
-                'val_start': '2021-04-01',
-                'val_end': '2021-04-30',
-                'test_start': '2021-05-01',
-                'test_end': '2021-05-31'
-            }
-        elif loop == 5:  # Loop 6
-            loop_config = {
-                'loop': 6,
-                'train_start': '2019-05-01',
-                'train_end': '2021-04-30',
-                'val_start': '2021-05-01',
-                'val_end': '2021-05-31',
-                'test_start': '2021-06-01',
-                'test_end': '2021-06-30'
-            }
-        elif loop == 6:  # Loop 7
-            loop_config = {
-                'loop': 7,
-                'train_start': '2019-06-01',
-                'train_end': '2021-05-31',
-                'val_start': '2021-06-01',
-                'val_end': '2021-06-30',
-                'test_start': '2021-07-01',
-                'test_end': '2021-07-31'
-            }
-        elif loop == 7:  # Loop 8
-            loop_config = {
-                'loop': 8,
-                'train_start': '2019-07-01',
-                'train_end': '2021-06-30',
-                'val_start': '2021-07-01',
-                'val_end': '2021-07-31',
-                'test_start': '2021-08-01',
-                'test_end': '2021-08-31'
-            }
-        elif loop == 8:  # Loop 9
-            loop_config = {
-                'loop': 9,
-                'train_start': '2019-08-01',
-                'train_end': '2021-07-31',
-                'val_start': '2021-08-01',
-                'val_end': '2021-08-31',
-                'test_start': '2021-09-01',
-                'test_end': '2021-09-30'
-            }
-        elif loop == 9:  # Loop 10
-            loop_config = {
-                'loop': 10,
-                'train_start': '2019-09-01',
-                'train_end': '2021-08-31',
-                'val_start': '2021-09-01',
-                'val_end': '2021-09-30',
-                'test_start': '2021-10-01',
-                'test_end': '2021-10-31'
-            }
-        elif loop == 10:  # Loop 11
-            loop_config = {
-                'loop': 11,
-                'train_start': '2019-10-01',
-                'train_end': '2021-09-30',
-                'val_start': '2021-10-01',
-                'val_end': '2021-10-31',
-                'test_start': '2021-11-01',
-                'test_end': '2021-11-30'
-            }
-        elif loop == 11:  # Loop 12
-            loop_config = {
-                'loop': 12,
-                'train_start': '2019-11-01',
-                'train_end': '2021-10-31',
-                'val_start': '2021-11-01',
-                'val_end': '2021-11-30',
-                'test_start': '2021-12-01',
-                'test_end': '2021-12-31'
-            }
-        
-        date_ranges.append(loop_config)
-    
-    return date_ranges
+# Set backend for unattended runs
+matplotlib.use('Agg')
 
-def create_config_file(loop_config):
-    """Create config.py with specific date ranges"""
-    config_template = f'''"""
-Configuration for Multi-Currency CNN-LSTM Forex Prediction
-Loop {loop_config['loop']} Configuration
-"""
+from config import Config
+from rolling_window_experiment import RollingWindowExperiment
+from visualization import ForexVisualizer
 
-import os
-import numpy as np
+warnings.filterwarnings('ignore')
 
-class Config:
-    """Configuration for Loop {loop_config['loop']}"""
+def print_system_info():
+    """Print system and configuration information"""
+    print("="*100)
+    print("🚀 MULTI-CURRENCY CNN-LSTM FOREX PREDICTION SYSTEM")
+    print("   12-LOOP ROLLING WINDOW EXPERIMENT WITH TEST SET EVALUATION")
+    print("="*100)
+    print(f"📅 Start Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🖥️  Platform: {sys.platform}")
+    print(f"🐍 Python Version: {sys.version.split()[0]}")
     
-    def __init__(self, model_type='multi'):
-        self.MODEL_TYPE = model_type
+    # Check TensorFlow
+    try:
+        import tensorflow as tf
+        print(f"🧠 TensorFlow Version: {tf.__version__}")
+        print(f"🔧 GPU Available: {len(tf.config.list_physical_devices('GPU')) > 0}")
+    except ImportError:
+        print("⚠️ TensorFlow not available")
+    
+    print("="*100)
+
+def estimate_execution_time():
+    """Estimate total execution time"""
+    print("\n⏱️ EXECUTION TIME ESTIMATION:")
+    print("   • Model training per loop: ~5-10 minutes")
+    print("   • Models per loop: 6 (3 multi + 3 single)")
+    print("   • Total loops: 12")
+    print("   • Estimated total time: 6-12 hours")
+    print("   • This includes data processing, training, evaluation, and visualization")
+    print("\n💡 TIP: Run with --unattended for automated execution")
+    print("💡 TIP: Use --threshold-choice to focus on one strategy")
+
+def run_complete_experiment(use_test_set=True, threshold_choice='Moderate', 
+                          generate_all_thresholds=False, unattended=True):
+    """
+    Run the complete 12-loop rolling window experiment
+    
+    Args:
+        use_test_set: Whether to use test set for final evaluation
+        threshold_choice: Which threshold strategy to focus on
+        generate_all_thresholds: Whether to generate results for all thresholds
+        unattended: Whether to run in unattended mode
+    """
+    
+    print(f"\n🚀 STARTING COMPLETE 12-LOOP EXPERIMENT")
+    print(f"{'='*80}")
+    print(f"📊 Evaluation Mode: {'Test Set' if use_test_set else 'Validation Set'}")
+    print(f"🎯 Primary Threshold: {threshold_choice}")
+    print(f"🔄 All Thresholds: {'Yes' if generate_all_thresholds else 'No'}")
+    print(f"🤖 Unattended Mode: {'Yes' if unattended else 'No'}")
+    print(f"{'='*80}")
+    
+    # Create base configuration
+    base_config = Config()
+    base_config.print_config_summary()
+    
+    # Create experiment manager
+    experiment = RollingWindowExperiment(base_config)
+    
+    # Display experiment schedule
+    print(f"\n📅 EXPERIMENT SCHEDULE:")
+    print(f"{'='*80}")
+    print(f"{'Loop':<6} {'Train Period':<25} {'Val Period':<15} {'Test Period':<15}")
+    print(f"{'='*80}")
+    
+    for schedule in experiment.rolling_schedule:
+        loop_num = schedule['loop']
+        train_period = f"{schedule['train_start']} to {schedule['train_end']}"
+        val_period = f"{schedule['val_start']} to {schedule['val_end']}"
+        test_period = f"{schedule['test_start']} to {schedule['test_end']}"
         
-        # Currency pairs configuration
-        if model_type == 'multi':
-            self.CURRENCY_PAIRS = ['EURUSD', 'GBPUSD', 'USDJPY']
-            self.FEATURES_PER_PAIR = 5
-            self.TOTAL_FEATURES = len(self.CURRENCY_PAIRS) * self.FEATURES_PER_PAIR
-            self.TARGET_PAIR = 'EURUSD'
+        print(f"{loop_num:<6} {train_period:<25} {val_period:<15} {test_period:<15}")
+    
+    print(f"{'='*80}")
+    
+    # Confirm execution
+    if not unattended:
+        response = input("\n🤔 Do you want to proceed with the experiment? (y/N): ")
+        if response.lower() not in ['y', 'yes']:
+            print("🚫 Experiment cancelled by user")
+            return
+    
+    # Record start time
+    start_time = time.time()
+    
+    try:
+        # Run the experiment
+        if generate_all_thresholds:
+            # Run experiment for all thresholds (more comprehensive but longer)
+            print(f"\n🔄 Running experiment with all threshold strategies...")
+            
+            for threshold in ['Conservative', 'Moderate', 'Aggressive']:
+                print(f"\n{'='*60}")
+                print(f"🎯 RUNNING WITH {threshold.upper()} THRESHOLD")
+                print(f"{'='*60}")
+                
+                experiment.run_complete_experiment(
+                    use_test_set=use_test_set,
+                    threshold_choice=threshold
+                )
+                
+                print(f"✅ {threshold} threshold completed")
+                
         else:
-            self.CURRENCY_PAIRS = [model_type]
-            self.FEATURES_PER_PAIR = 5
-            self.TOTAL_FEATURES = self.FEATURES_PER_PAIR
-            self.TARGET_PAIR = model_type
+            # Run experiment with single threshold (faster)
+            print(f"\n🎯 Running experiment with {threshold_choice} threshold...")
+            
+            experiment.run_complete_experiment(
+                use_test_set=use_test_set,
+                threshold_choice=threshold_choice
+            )
         
-        # Model architecture parameters
-        self.WINDOW_SIZE = 60
+        # Calculate execution time
+        end_time = time.time()
+        execution_hours = (end_time - start_time) / 3600
         
-        if model_type == 'multi':
-            self.CNN_FILTERS_1 = 32      
-            self.CNN_FILTERS_2 = 64     
-            self.LSTM_UNITS_1 = 64      
-            self.LSTM_UNITS_2 = 32
-        else:
-            self.CNN_FILTERS_1 = 16      
-            self.CNN_FILTERS_2 = 32     
-            self.LSTM_UNITS_1 = 32      
-            self.LSTM_UNITS_2 = 16
+        print(f"\n🎉 EXPERIMENT COMPLETED SUCCESSFULLY!")
+        print(f"⏱️ Total Execution Time: {execution_hours:.2f} hours")
+        print(f"📁 Results saved in: {experiment.results_path}")
         
-        self.CNN_KERNEL_SIZE = 3
-        self.DENSE_UNITS = 32
-        self.DROPOUT_RATE = 0.25
+        # Generate final visualizations
+        print(f"\n📊 GENERATING FINAL VISUALIZATIONS...")
         
-        # Training parameters
-        self.LEARNING_RATE = 0.00005
-        self.BATCH_SIZE = 32         
-        self.EPOCHS = 100            
-        self.VALIDATION_SPLIT = 0.2
+        final_config = Config()
+        final_config.RESULTS_PATH = experiment.results_path
         
-        # Callback parameters
-        self.EARLY_STOPPING_PATIENCE = 25
-        self.REDUCE_LR_PATIENCE = 12
-        self.REDUCE_LR_FACTOR = 0.5          
-        self.MIN_LR = 1e-8
+        visualizer = ForexVisualizer(final_config, unattended_mode=True)
+        visualizer.create_comprehensive_report(experiment.all_loops_results)
         
-        # Data splits - Loop {loop_config['loop']}
-        self.TRAIN_START = '{loop_config['train_start']}'
-        self.TRAIN_END = '{loop_config['train_end']}'
-        self.VAL_START = '{loop_config['val_start']}'
-        self.VAL_END = '{loop_config['val_end']}'
-        self.TEST_START = '{loop_config['test_start']}'
-        self.TEST_END = '{loop_config['test_end']}'
+        print(f"✅ Final visualizations completed")
         
-        # Trading strategy thresholds
-        self.THRESHOLDS = {{
-            'conservative': {{'buy': 0.7, 'sell': 0.3}},
-            'moderate': {{'buy': 0.6, 'sell': 0.4}},
-            'aggressive': {{'buy': 0.55, 'sell': 0.45}}
-        }}
+        # Print summary statistics
+        print_experiment_summary(experiment)
         
-        # Risk management
-        self.MIN_HOLDING_HOURS = 1
-        self.MAX_HOLDING_HOURS = 3
-        self.STOP_LOSS_PCT = 2
+        return experiment
         
-        # Portfolio settings
-        self.INITIAL_CAPITAL = 10000
-        self.POSITION_SIZE = 0.1
-        self.MAX_POSITIONS = 1
+    except KeyboardInterrupt:
+        print(f"\n⚠️ Experiment interrupted by user")
+        execution_time = (time.time() - start_time) / 3600
+        print(f"⏱️ Partial execution time: {execution_time:.2f} hours")
+        return None
         
-        # Technical indicators parameters
-        self.RSI_PERIOD = 14
-        self.RSI_OVERBOUGHT = 70
-        self.RSI_OVERSOLD = 30
-        
-        self.MACD_FAST = 12
-        self.MACD_SLOW = 26
-        self.MACD_SIGNAL = 9
-        
-        # Directory paths
-        self.DATA_PATH = 'data/'
-        self.RESULTS_PATH = f'results/loop_{loop_config['loop']}/{{model_type}}/'
-        self.MODELS_PATH = f'models/loop_{loop_config['loop']}/{{model_type}}/'
-        self.CHECKPOINTS_PATH = f'checkpoints/loop_{loop_config['loop']}/{{model_type}}/'
-        
-        # Create directories if they don't exist
-        self._create_directories()
-    
-    def _create_directories(self):
-        """Create necessary directories"""
-        for path in [self.RESULTS_PATH, self.MODELS_PATH, self.CHECKPOINTS_PATH]:
-            os.makedirs(path, exist_ok=True)
-    
-    def get_model_config(self):
-        """Return model configuration as dictionary"""
-        return {{
-            'model_type': self.MODEL_TYPE,
-            'window_size': self.WINDOW_SIZE,
-            'total_features': self.TOTAL_FEATURES,
-            'cnn_filters_1': self.CNN_FILTERS_1,
-            'cnn_filters_2': self.CNN_FILTERS_2,
-            'cnn_kernel_size': self.CNN_KERNEL_SIZE,
-            'lstm_units_1': self.LSTM_UNITS_1,
-            'lstm_units_2': self.LSTM_UNITS_2,
-            'dense_units': self.DENSE_UNITS,
-            'dropout_rate': self.DROPOUT_RATE,
-            'learning_rate': self.LEARNING_RATE
-        }}
-    
-    def get_training_config(self):
-        """Return training configuration as dictionary"""
-        return {{
-            'batch_size': self.BATCH_SIZE,
-            'epochs': self.EPOCHS,
-            'validation_split': self.VALIDATION_SPLIT
-        }}
-    
-    def print_config(self):
-        """Print current configuration"""
-        print("="*60)
-        print(f"FOREX PREDICTION SYSTEM - LOOP {loop_config['loop']} - {{self.MODEL_TYPE.upper()}}")
-        print("="*60)
-        print(f"Model Type: {{self.MODEL_TYPE}}")
-        print(f"Currency Pairs: {{self.CURRENCY_PAIRS}}")
-        print(f"Target Pair: {{self.TARGET_PAIR}}")
-        print(f"Total Features: {{self.TOTAL_FEATURES}}")
-        print(f"Window Size: {{self.WINDOW_SIZE}}")
-        print(f"Model Architecture: CNN({{self.CNN_FILTERS_1}}, {{self.CNN_FILTERS_2}}) + LSTM({{self.LSTM_UNITS_1}}, {{self.LSTM_UNITS_2}})")
-        print(f"Training Period: {{self.TRAIN_START}} to {{self.TRAIN_END}}")
-        print(f"Validation Period: {{self.VAL_START}} to {{self.VAL_END}}")
-        print(f"Test Period: {{self.TEST_START}} to {{self.TEST_END}}")
-        print(f"Initial Capital: ${{self.INITIAL_CAPITAL:,}}")
-        print(f"Batch Size: {{self.BATCH_SIZE}}")
-        print(f"Max Epochs: {{self.EPOCHS}}")
-        print(f"Learning Rate: {{self.LEARNING_RATE}}")
-        print(f"Dropout Rate: {{self.DROPOUT_RATE}}")
-        print("Trading Thresholds:")
-        for strategy, thresholds in self.THRESHOLDS.items():
-            print(f"  {{strategy.title()}}: Buy ≥ {{thresholds['buy']}}, Sell ≤ {{thresholds['sell']}}")
-        print("="*60)
-'''
-    
-    return config_template
+    except Exception as e:
+        print(f"\n❌ Experiment failed with error: {e}")
+        execution_time = (time.time() - start_time) / 3600
+        print(f"⏱️ Execution time before failure: {execution_time:.2f} hours")
+        raise
 
-def save_loop_results(loop_num, results):
-    """Save results for specific loop"""
-    results_dir = f'experiment_results/loop_{loop_num}'
-    os.makedirs(results_dir, exist_ok=True)
+def print_experiment_summary(experiment):
+    """Print summary of experiment results"""
     
-    # Save as JSON for easy analysis
-    with open(f'{results_dir}/summary.json', 'w') as f:
-        json.dump(results, f, indent=4, default=str)
+    print(f"\n📋 EXPERIMENT SUMMARY")
+    print(f"{'='*80}")
     
-    print(f"✅ Loop {loop_num} results saved to {results_dir}")
+    if not experiment.all_loops_results:
+        print("⚠️ No results available")
+        return
+    
+    # Calculate overall statistics
+    total_loops = len(experiment.all_loops_results)
+    total_strategies = len(experiment.all_loops_results[1]) if 1 in experiment.all_loops_results else 0
+    
+    print(f"📊 Total Loops Completed: {total_loops}")
+    print(f"🔧 Strategies per Loop: {total_strategies}")
+    print(f"🎯 Total Evaluations: {total_loops * total_strategies}")
+    
+    # Find best performing strategies
+    print(f"\n🏆 TOP PERFORMING STRATEGIES (by average return):")
+    print(f"{'='*80}")
+    
+    # Calculate average performance across all loops
+    strategy_averages = {}
+    
+    for loop_results in experiment.all_loops_results.values():
+        for strategy_name, performance in loop_results.items():
+            if strategy_name not in strategy_averages:
+                strategy_averages[strategy_name] = []
+            strategy_averages[strategy_name].append(performance.get('total_return_pct', 0))
+    
+    # Calculate means and sort
+    strategy_means = {}
+    for strategy_name, returns in strategy_averages.items():
+        strategy_means[strategy_name] = sum(returns) / len(returns)
+    
+    # Sort by performance
+    sorted_strategies = sorted(strategy_means.items(), key=lambda x: x[1], reverse=True)
+    
+    print(f"{'Rank':<5} {'Strategy':<50} {'Avg Return %':<12}")
+    print(f"{'='*80}")
+    
+    for rank, (strategy_name, avg_return) in enumerate(sorted_strategies[:10], 1):
+        clean_name = strategy_name.replace(' (EURUSD)', '').replace(' (GBPUSD)', '').replace(' (USDJPY)', '')
+        print(f"{rank:<5} {clean_name:<50} {avg_return:>10.2f}%")
+    
+    # Currency pair analysis
+    print(f"\n💱 PERFORMANCE BY CURRENCY PAIR:")
+    print(f"{'='*80}")
+    
+    for currency in ['EURUSD', 'GBPUSD', 'USDJPY']:
+        currency_strategies = [s for s in strategy_means.keys() if currency in s]
+        if currency_strategies:
+            currency_returns = [strategy_means[s] for s in currency_strategies]
+            avg_return = sum(currency_returns) / len(currency_returns)
+            best_strategy = max(currency_strategies, key=lambda s: strategy_means[s])
+            best_return = strategy_means[best_strategy]
+            
+            print(f"{currency}:")
+            print(f"  Average Return: {avg_return:>8.2f}%")
+            print(f"  Best Strategy:  {best_strategy.replace(f' ({currency})', '')} ({best_return:.2f}%)")
+            print()
 
-def print_experiment_summary():
-    """Print summary of all 12 loops"""
-    print("\n" + "="*80)
-    print("EXPERIMENT CONFIGURATION SUMMARY - 12 MONTHLY LOOPS")
-    print("="*80)
+def run_validation_vs_test_analysis(threshold_choice='Moderate'):
+    """
+    Run both validation and test evaluations for comparison analysis
+    """
     
-    date_ranges = generate_date_ranges()
+    print(f"\n🔍 RUNNING VALIDATION VS TEST COMPARISON ANALYSIS")
+    print(f"{'='*80}")
+    print(f"🎯 Threshold: {threshold_choice}")
+    print(f"📊 This will run the experiment twice: once with validation, once with test")
+    print(f"{'='*80}")
     
-    print(f"{'Loop':<6} {'Train Start':<12} {'Train End':<12} {'Val Start':<12} {'Val End':<12} {'Test Start':<12} {'Test End':<12}")
-    print("-"*80)
+    base_config = Config()
     
-    for config in date_ranges:
-        print(f"{config['loop']:<6} {config['train_start']:<12} {config['train_end']:<12} "
-              f"{config['val_start']:<12} {config['val_end']:<12} "
-              f"{config['test_start']:<12} {config['test_end']:<12}")
+    # Run validation experiment
+    print(f"\n📊 PHASE 1: VALIDATION SET EVALUATION")
+    print(f"{'='*60}")
     
-    print("-"*80)
-    print("\nTo run a specific loop manually:")
-    print("1. Copy the configuration for that loop to config.py")
-    print("2. Run: python main_fx.py --model all --test")
-    print("\nTo run all loops automatically:")
-    print("python run_experiments.py --run-all")
+    val_experiment = RollingWindowExperiment(base_config)
+    val_experiment.results_path = 'results/validation_analysis/'
+    os.makedirs(val_experiment.results_path, exist_ok=True)
+    
+    val_experiment.run_complete_experiment(
+        use_test_set=False,
+        threshold_choice=threshold_choice
+    )
+    
+    # Run test experiment
+    print(f"\n🧪 PHASE 2: TEST SET EVALUATION")
+    print(f"{'='*60}")
+    
+    test_experiment = RollingWindowExperiment(base_config)
+    test_experiment.results_path = 'results/test_analysis/'
+    os.makedirs(test_experiment.results_path, exist_ok=True)
+    
+    test_experiment.run_complete_experiment(
+        use_test_set=True,
+        threshold_choice=threshold_choice
+    )
+    
+    # Create comparison analysis
+    print(f"\n🔍 PHASE 3: COMPARISON ANALYSIS")
+    print(f"{'='*60}")
+    
+    comparison_config = Config()
+    comparison_config.RESULTS_PATH = 'results/validation_vs_test_comparison/'
+    os.makedirs(comparison_config.RESULTS_PATH, exist_ok=True)
+    
+    # Generate comparison visualizations
+    visualizer = ForexVisualizer(comparison_config, unattended_mode=True)
+    
+    # Create side-by-side comparison plots
+    # This would require additional implementation in the visualizer
+    
+    print(f"✅ Validation vs Test analysis completed")
+    print(f"📁 Validation results: {val_experiment.results_path}")
+    print(f"📁 Test results: {test_experiment.results_path}")
+    print(f"📁 Comparison results: {comparison_config.RESULTS_PATH}")
 
-def main():
-    """Main function to display experiment configuration"""
-    import argparse
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description='Run complete 12-loop rolling window experiment for Multi-Currency CNN-LSTM Forex Prediction',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run standard experiment with test set evaluation
+  python run_experiments.py --use-test-set --threshold-choice Moderate
+  
+  # Run validation set evaluation for development
+  python run_experiments.py --threshold-choice Moderate
+  
+  # Run comprehensive analysis with all thresholds (takes longer)
+  python run_experiments.py --use-test-set --all-thresholds
+  
+  # Run validation vs test comparison
+  python run_experiments.py --mode comparison --threshold-choice Moderate
+        """
+    )
     
-    parser = argparse.ArgumentParser(description='Experiment Runner for 12 Monthly Loops')
-    parser.add_argument('--loop', type=int, choices=range(1, 13),
-                       help='Generate config for specific loop')
-    parser.add_argument('--show-all', action='store_true',
-                       help='Show all loop configurations')
-    parser.add_argument('--generate-config', type=int, choices=range(1, 13),
-                       help='Generate config.py for specific loop')
+    # Experiment configuration
+    parser.add_argument('--use-test-set', action='store_true',
+                       help='Use test set for final evaluation (default: validation set)')
+    
+    parser.add_argument('--threshold-choice', type=str, default='Moderate',
+                       choices=['Conservative', 'Moderate', 'Aggressive'],
+                       help='Primary threshold strategy to focus on (default: Moderate)')
+    
+    parser.add_argument('--all-thresholds', action='store_true',
+                       help='Generate results for all threshold strategies (takes 3x longer)')
+    
+    # Execution mode
+    parser.add_argument('--mode', type=str, default='standard',
+                       choices=['standard', 'comparison'],
+                       help='Execution mode: standard experiment or validation vs test comparison')
+    
+    parser.add_argument('--unattended', action='store_true',
+                       help='Run in fully automated mode without user prompts')
+    
+    # Information flags
+    parser.add_argument('--estimate-time', action='store_true',
+                       help='Show execution time estimation and exit')
+    
+    parser.add_argument('--info', action='store_true',
+                       help='Show system information and exit')
     
     args = parser.parse_args()
     
-    if args.show_all:
-        print_experiment_summary()
+    # Handle information requests
+    if args.info:
+        print_system_info()
+        sys.exit(0)
     
-    elif args.generate_config:
-        date_ranges = generate_date_ranges()
-        loop_config = date_ranges[args.generate_config - 1]
-        config_content = create_config_file(loop_config)
-        
-        # Save to a temporary file
-        temp_filename = f'config_loop_{args.generate_config}.py'
-        with open(temp_filename, 'w') as f:
-            f.write(config_content)
-        
-        print(f"\n✅ Configuration for Loop {args.generate_config} saved to {temp_filename}")
-        print(f"\nTo use this configuration:")
-        print(f"1. Backup your current config.py: cp config.py config_backup.py")
-        print(f"2. Replace with new config: cp {temp_filename} config.py")
-        print(f"3. Run training: python main_fx.py --model all --test")
-        print(f"4. Results will be saved in: results/loop_{args.generate_config}/")
+    if args.estimate_time:
+        estimate_execution_time()
+        sys.exit(0)
     
-    else:
-        print_experiment_summary()
-        print("\nFor specific loop config: python run_experiments.py --generate-config <loop_number>")
-
-if __name__ == "__main__":
-    main()
+    # Print system info
+    print_system_info()
+    
+    try:
+        if args.mode == 'standard':
+            # Run standard experiment
+            run_complete_experiment(
+                use_test_set=args.use_test_set,
+                threshold_choice=args.threshold_choice,
+                generate_all_thresholds=args.all_thresholds,
+                unattended=args.unattended
+            )
+            
+        elif args.mode == 'comparison':
+            # Run validation vs test comparison
+            run_validation_vs_test_analysis(args.threshold_choice)
+        
+        print(f"\n🎉 ALL EXPERIMENTS COMPLETED SUCCESSFULLY!")
+        print(f"📅 End Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+    except KeyboardInterrupt:
+        print(f"\n⚠️ Experiments interrupted by user")
+        sys.exit(1)
+        
+    except Exception as e:
+        print(f"\n❌ Experiments failed with error: {e}")
+        sys.exit(1)

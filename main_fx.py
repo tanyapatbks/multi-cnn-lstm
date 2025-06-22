@@ -1,328 +1,295 @@
 """
-Multi-Currency CNN-LSTM Forex Prediction System
-Enhanced version with Single Currency Model Support
+Complete Main execution file for the Multi-Currency CNN-LSTM Forex Prediction System.
+Enhanced with multiple threshold support, comprehensive analysis, and leverage support.
 """
 import argparse
 import warnings
 import numpy as np
 import tensorflow as tf
+import pandas as pd
+import os
+import matplotlib
 
-# ==================================================================
-# <<< เพิ่มส่วนนี้: ตรวจจับ Unattended Mode ก่อน Import Matplotlib >>>
-# ==================================================================
-# สร้าง Parser ชั่วคราวเพื่อเช็ค Flag --unattended ก่อน
+# Set backend before importing pyplot for unattended runs
 parser_check = argparse.ArgumentParser(add_help=False)
 parser_check.add_argument('--unattended', action='store_true')
 args_check, _ = parser_check.parse_known_args()
-
-# ถ้าใช้ --unattended ให้เปลี่ยน Backend ของ Matplotlib เพื่อไม่ให้แสดงกราฟ
 if args_check.unattended:
-    import matplotlib
     matplotlib.use('Agg')
-    print("🎨 Running in Unattended Mode: Plots will be saved to files without being displayed.")
-# ==================================================================
 
-import pandas as pd
-from sklearn.metrics import accuracy_score
-
-warnings.filterwarnings('ignore')
-
-# Import our modules
 from config import Config
 from data_processor import DataProcessor, SequencePreparator
 from cnn_lstm_model import CNNLSTMModel
-from trading_strategy import FixedHoldingTradingStrategy, TechnicalIndicatorStrategies, SimpleBaselineStrategies
-from checkpoint import CheckpointManager, ResultsManager
+from trading_strategy import (TradingSimulator, get_cnn_lstm_signals_multiple_thresholds, 
+                             get_rsi_signals, get_macd_signals, get_buy_and_hold_signals)
 from visualization import ForexVisualizer
 
-def train_single_model(model_type='multi', start_from_step=None, use_test_set=False, unattended_mode=False):
+warnings.filterwarnings('ignore')
+
+def run_complete_loop(config_base: Config, use_test_set=False, unattended_mode=False):
     """
-    Train a single model (either multi-currency or single currency)
+    Enhanced complete loop with multiple threshold support and leverage for comprehensive evaluation.
     """
-    print(f"\n🚀 Training {model_type.upper()} Model")
-    print("="*70)
+    all_loop_results = {}
     
-    config = Config(model_type=model_type)
-    config.print_config()
+    # --- Part 1: Prepare Data ONCE for the entire loop ---
+    print("\n📚 STEP 1: PREPARING ALL DATA FOR THIS LOOP...")
+    master_processor = DataProcessor(config_base)
     
-    checkpoint_manager = CheckpointManager(config)
-    results_manager = ResultsManager(config)
-    
-    # <<< แก้ไขส่วนนี้: ตรวจสอบ Unattended Mode ก่อนถามผู้ใช้ >>>
-    checkpoint = checkpoint_manager.load_checkpoint()
-    if checkpoint and start_from_step is None and not unattended_mode:
-        try:
-            response = input("📋 Resume from checkpoint? (y/n): ")
-            if response.lower() == 'y':
-                checkpoint_step = checkpoint['step']
-                if '_' in checkpoint_step:
-                    start_from_step = int(checkpoint_step.split('_')[0])
-                else: start_from_step = 1
-        except EOFError:
-            print("No input detected, starting fresh.")
-            start_from_step = 1
-    
-    np.random.seed(42)
-    tf.random.set_seed(42)
-    tf.config.experimental.enable_op_determinism()
-    
-    # --- The rest of the training pipeline remains largely the same ---
-    # (The full code for steps 1-5 is omitted for brevity but is unchanged)
-    if start_from_step is None or start_from_step <= 1:
-        print("\n📚 STEP 1: DATA LOADING AND PREPROCESSING")
-        processor = DataProcessor(config)
-        raw_data = processor.load_currency_data()
-        if raw_data is None: return None
-        processed_data = processor.preprocess_data(raw_data)
-        unified_data, feature_columns = processor.create_unified_dataset(processed_data)
-        checkpoint_manager.save_checkpoint("1_data_preprocessing", {'processed_data': processed_data, 'unified_data': unified_data, 'feature_columns': feature_columns})
-    else:
-        if checkpoint and 'data' in checkpoint and 'processed_data' in checkpoint['data']:
-            processed_data, unified_data, feature_columns = checkpoint['data']['processed_data'], checkpoint['data']['unified_data'], checkpoint['data']['feature_columns']
-            print("✅ Loaded data from checkpoint")
-        else:
-            print("❌ No valid data in checkpoint. Please run from step 1."); return None
-
-    if start_from_step is None or start_from_step <= 2:
-        print("\n📋 STEP 2: SEQUENCE PREPARATION")
-        sequence_prep = SequencePreparator(config)
-        X, y, timestamps = sequence_prep.create_sequences(unified_data, target_pair=config.TARGET_PAIR)
-        data_splits = sequence_prep.split_temporal_data(X, y, timestamps)
-        checkpoint_data = checkpoint_manager.load_checkpoint(verbose=False)['data'] if checkpoint_manager.checkpoint_exists() else {}
-        checkpoint_data.update({'X': X, 'y': y, 'timestamps': timestamps, 'data_splits': data_splits})
-        checkpoint_manager.save_checkpoint("2_sequence_creation", checkpoint_data)
-    else:
-        if 'X' not in locals() and checkpoint and 'data' in checkpoint and 'X' in checkpoint['data']:
-            X, y, timestamps, data_splits = checkpoint['data']['X'], checkpoint['data']['y'], checkpoint['data']['timestamps'], checkpoint['data']['data_splits']
-            print("✅ Loaded sequence data from checkpoint")
-        elif 'X' not in locals():
-            print("❌ No sequence data found. Please run from step 2."); return None
-
-    if start_from_step is None or start_from_step <= 3:
-        print("\n🏗️  STEP 3: MODEL TRAINING")
-        model_builder = CNNLSTMModel(config)
-        model = model_builder.build_model()
-        history = model_builder.train_model(data_splits['train'], data_splits['val'])
-        model_builder.save_model()
-        checkpoint_data = checkpoint_manager.load_checkpoint(verbose=False)['data'] if checkpoint_manager.checkpoint_exists() else {}
-        checkpoint_data.update({'model_info': model_builder.get_model_info(), 'history': history.history if history else {}})
-        checkpoint_manager.save_checkpoint("3_model_training", checkpoint_data)
-    else:
-        model_builder = CNNLSTMModel(config)
-        try:
-            model_builder.load_model(f"{config.MODELS_PATH}best_model.h5")
-        except Exception:
-            try:
-                model_builder.load_model(f"{config.MODELS_PATH}trained_model.h5")
-            except Exception as e:
-                print(f"❌ Could not load any model: {str(e)}. Please run from step 3."); return None
-
-    if start_from_step is None or start_from_step <= 4:
-        print("\n📊 STEP 4: MODEL EVALUATION")
-        eval_set = 'test' if use_test_set else 'val'
-        if use_test_set: print("⚠️  Using TEST SET for evaluation!")
-        eval_metrics = model_builder.evaluate_model_enhanced(data_splits[eval_set])
-        results_manager.save_model_metrics(eval_metrics)
-        checkpoint_data = checkpoint_manager.load_checkpoint(verbose=False)['data'] if checkpoint_manager.checkpoint_exists() else {}
-        checkpoint_data.update({'eval_metrics': eval_metrics, 'eval_set': eval_set})
-        checkpoint_manager.save_checkpoint("4_model_evaluation", checkpoint_data)
-    else:
-        eval_metrics = results_manager.load_results("cnn_lstm_metrics.pkl", verbose=False)
-        if eval_metrics is None: print("❌ No evaluation metrics found. Please run from step 4."); return None
-
-    if start_from_step is None or start_from_step <= 5:
-        print("\n💼 STEP 5: TRADING STRATEGY TESTING")
-        eval_set = 'test' if use_test_set else 'val'
-        X_eval, _, eval_timestamps = data_splits[eval_set]
-        predictions = model_builder.predict(X_eval)
-        processor = DataProcessor(config)
-        target_pair = config.TARGET_PAIR
-        eval_price_data = processor.get_price_data(processed_data, eval_timestamps, target_pair)
-        eval_prices = eval_price_data['Close_Price']
-        technical_indicators = processor.get_technical_indicators(processed_data, eval_timestamps, target_pair)
-        
-        fixed_strategy = FixedHoldingTradingStrategy(config)
-        trading_results = {}
-        multi_pairs_results = None
-        
-        if model_type == 'multi':
-            multi_pairs_results = fixed_strategy.apply_multi_model_to_all_pairs(model_builder, processed_data, data_splits, eval_set, verbose=True)
-            for currency_pair, pair_strategies in multi_pairs_results.items():
-                for strategy_name, strategy_result in pair_strategies.items():
-                    key = f"Multi-Model {currency_pair} CNN-LSTM {strategy_name}"
-                    trading_results[key] = strategy_result
-        else:
-            cnn_strategies = fixed_strategy.compare_strategies(predictions, eval_prices, eval_timestamps, model_type, verbose=True)
-            for strategy_name, strategy_result in cnn_strategies.items():
-                key = f"{model_type} CNN-LSTM {strategy_name}"
-                trading_results[key] = strategy_result
-        
-        tech_strategy = TechnicalIndicatorStrategies(config)
-        baseline_strategy = SimpleBaselineStrategies(config)
-        trading_results['Buy & Hold'] = baseline_strategy.buy_and_hold(eval_prices, eval_timestamps, target_pair)
-        trading_results['RSI-based Trading'] = tech_strategy.rsi_strategy(eval_prices, eval_timestamps, technical_indicators, target_pair)
-        trading_results['MACD-based Trading'] = tech_strategy.macd_strategy(eval_prices, eval_timestamps, technical_indicators, target_pair)
-        
-        results_manager.save_trading_results(trading_results)
-        checkpoint_data = checkpoint_manager.load_checkpoint(verbose=False)['data'] if checkpoint_manager.checkpoint_exists() else {}
-        checkpoint_data.update({'trading_results': trading_results, 'predictions': predictions, 'multi_pairs_results': multi_pairs_results})
-        checkpoint_manager.save_checkpoint("5_strategy_testing", checkpoint_data)
-    else:
-        trading_results = results_manager.load_results("fixed_holding_results.pkl", verbose=False)
-        if trading_results is None: print("❌ No trading results found. Please run from step 5."); return None
-
-    # Step 6 is now handled by the calling function to allow for batch processing
-    print(f"\n✅ {model_type.upper()} MODEL TRAINING COMPLETED!")
-    print("="*70)
-    checkpoint_manager.save_checkpoint("6_final_results", {'eval_metrics': eval_metrics, 'trading_results': trading_results})
-    return {'model_type': model_type, 'eval_metrics': eval_metrics, 'trading_results': trading_results}
-
-
-def compare_all_models(currency_pair='EURUSD', unattended_mode=False):
-    """
-    Compare multi vs single model, passing the unattended flag to the visualizer.
-    """
-    print(f"\n🔄 Comparing Multi vs Single Model for {currency_pair}")
-    print("="*70)
-    multi_config, single_config = Config(model_type='multi'), Config(model_type=currency_pair)
-    multi_results_manager, single_results_manager = ResultsManager(multi_config), ResultsManager(single_config)
-    multi_trading = multi_results_manager.load_results("fixed_holding_results.pkl", verbose=False)
-    single_trading = single_results_manager.load_results("fixed_holding_results.pkl", verbose=False)
-
-    if not multi_trading or not single_trading:
-        print(f"❌ Results not found for comparison. Please train both models first."); return None
-
-    comparison_results = {}
-    
-    # Find best Multi-Model result
-    best_multi_return, best_multi_strategy_result = -float('inf'), None
-    for name, result in multi_trading.items():
-        if f'Multi-Model {currency_pair} CNN-LSTM' in name and result.get('performance', {}).get('total_return_pct', -float('inf')) > best_multi_return:
-            best_multi_return = result['performance']['total_return_pct']
-            best_multi_strategy_result = result
-    if best_multi_strategy_result: comparison_results['Multi-Model CNN-LSTM'] = best_multi_strategy_result
-    else: print(f"⚠️ Could not find multi-model results for {currency_pair}")
-
-    # Find best Single-Model result
-    best_single_return, best_single_strategy_result = -float('inf'), None
-    for name, result in single_trading.items():
-        if f'{currency_pair} CNN-LSTM' in name and result.get('performance', {}).get('total_return_pct', -float('inf')) > best_single_return:
-            best_single_return = result['performance']['total_return_pct']
-            best_single_strategy_result = result
-    if best_single_strategy_result: comparison_results[f'{currency_pair} CNN-LSTM'] = best_single_strategy_result
-    else: print(f"⚠️ Could not find single-model results for {currency_pair}")
-
-    # Add baselines
-    for name, result in single_trading.items():
-        if 'Buy & Hold' in name: comparison_results['Buy & Hold'] = result
-        elif 'RSI-based' in name: comparison_results['RSI-based Trading'] = result
-        elif 'MACD-based' in name: comparison_results['MACD-based Trading'] = result
-
-    # <<< แก้ไขส่วนนี้: ส่ง Flag unattended_mode ไปให้ Visualizer >>>
-    visualizer = ForexVisualizer(single_config, unattended_mode=unattended_mode)
-    visualizer.plot_comprehensive_comparison(comparison_results, currency_pair)
-    visualizer.plot_cumulative_returns_comparison(comparison_results, currency_pair)
-    print(f"✅ Comparison completed for {currency_pair}")
-    return comparison_results
-
-def run_pipeline(args):
-    """
-    Main pipeline to orchestrate training and visualization based on args.
-    """
-    if args.visualize_only:
-        print("📊 Running in visualization-only mode...")
-        currency_comparisons = {}
-        for currency in ['EURUSD', 'GBPUSD', 'USDJPY']:
-            comparison = compare_all_models(currency, unattended_mode=args.unattended)
-            if comparison: currency_comparisons[currency] = comparison
-        if currency_comparisons:
-            visualizer = ForexVisualizer(Config(model_type='multi'), unattended_mode=args.unattended)
-            visualizer.create_performance_summary_table(currency_comparisons)
-        print("\n✅ Visualization and comparison complete.")
+    raw_data = master_processor.load_currency_data()
+    if raw_data is None: 
+        print("❌ Failed to load raw data. Exiting.")
         return
+    processed_data = master_processor.preprocess_data(raw_data)
 
-    if args.model == 'all':
-        all_results = {}
-        model_types_to_train = ['multi', 'EURUSD', 'GBPUSD', 'USDJPY']
-        for model_type in model_types_to_train:
-            # <<< แก้ไขส่วนนี้: ลบ checkpoint อัตโนมัติใน Unattended Mode >>>
-            if args.unattended:
-                config = Config(model_type=model_type)
-                checkpoint_manager = CheckpointManager(config)
-                if checkpoint_manager.checkpoint_exists():
-                    print(f"🧹 Unattended mode: Deleting existing checkpoint for '{model_type}'.")
-                    checkpoint_manager.delete_checkpoint(verbose=False)
-            
-            results = train_single_model(model_type, use_test_set=args.test, unattended_mode=args.unattended)
-            if results: all_results[model_type] = results
-        
-        print("\n" + "="*70 + "\nTRAINING COMPLETE. NOW RUNNING FINAL ANALYSIS.\n" + "="*70)
-        currency_comparisons = {}
-        for currency in ['EURUSD', 'GBPUSD', 'USDJPY']:
-            comparison = compare_all_models(currency, unattended_mode=args.unattended)
-            if comparison: currency_comparisons[currency] = comparison
-        if currency_comparisons:
-            visualizer = ForexVisualizer(Config(model_type='multi'), unattended_mode=args.unattended)
-            visualizer.create_performance_summary_table(currency_comparisons)
-        print("\n✅✅✅ FULL PIPELINE COMPLETED SUCCESSFULLY! ✅✅✅")
+    # --- Part 2: Train all CNN-LSTM Model Variations with Multiple Thresholds and Leverage ---
+    print(f"\n{'='*80}\n🚀 PART 1: TRAINING CNN-LSTM MODELS WITH LEVERAGE SUPPORT\n{'='*80}")
+    print("💰 Leverage Configuration:")
+    print("   Conservative: 2.0x (High confidence signals)")
+    print("   Moderate:     1.0x (Standard leverage)")
+    print("   Aggressive:   0.5x (Uncertain signals)")
+    print("="*80)
     
-    else: # Run for a single specified model
-        if args.new:
-            config = Config(model_type=args.model)
-            checkpoint_manager = CheckpointManager(config)
-            checkpoint_manager.delete_checkpoint()
-            
-        results = train_single_model(args.model, start_from_step=args.step, use_test_set=args.test, unattended_mode=args.unattended)
-        # Display results for single run
+    model_variations = [
+        {'model_type': 'multi', 'target_pair': 'EURUSD'},
+        {'model_type': 'multi', 'target_pair': 'GBPUSD'},
+        {'model_type': 'multi', 'target_pair': 'USDJPY'},
+        {'model_type': 'EURUSD', 'target_pair': 'EURUSD'},
+        {'model_type': 'GBPUSD', 'target_pair': 'GBPUSD'},
+        {'model_type': 'USDJPY', 'target_pair': 'USDJPY'},
+    ]
+
+    for variation in model_variations:
+        results = train_and_evaluate_model_multiple_thresholds(variation, config_base, processed_data, use_test_set, unattended_mode)
         if results:
-            print("\n📊 RESULTS SUMMARY AND VISUALIZATION")
-            config = Config(model_type=args.model)
-            print_detailed_results(results['eval_metrics'], results['trading_results'], config)
-            visualizer = ForexVisualizer(config, unattended_mode=args.unattended)
-            # You might need to load history from checkpoint to plot curves here
-            print("To see training curves, please check the saved file in the results directory.")
+            all_loop_results.update(results)
+    
+    # --- Part 3: Evaluate Baseline Strategies ---
+    print(f"\n{'='*80}\n📊 PART 2: CALCULATING BASELINE STRATEGIES WITH MODERATE LEVERAGE\n{'='*80}")
+    for currency_pair in ['EURUSD', 'GBPUSD', 'USDJPY']:
+        print(f"--- Calculating baselines for {currency_pair} (Leverage: 1.0x) ---")
+        baseline_results = evaluate_baselines(config_base, processed_data, currency_pair, use_test_set)
+        all_loop_results.update(baseline_results)
 
+    # --- Part 4: Generate Final Visualizations for this Loop ---
+    print(f"\n{'='*80}\n🎨 PART 3: GENERATING ENHANCED VISUALIZATIONS\n{'='*80}")
+    
+    report_path = f'results/final_report_for_val_{config_base.VAL_START}_to_{config_base.VAL_END}/'
+    os.makedirs(report_path, exist_ok=True)
+    
+    report_config = Config(); report_config.RESULTS_PATH = report_path
+    visualizer = ForexVisualizer(report_config, unattended_mode=unattended_mode)
+    
+    # Enhanced visualization with leverage information
+    visualizer.create_loop_summary_csv(all_loop_results)
+    for currency_pair in ['EURUSD', 'GBPUSD', 'USDJPY']:
+        visualizer.plot_loop_comparison_graph(all_loop_results, currency_pair)
+    
+    # Additional threshold comparison summary
+    visualizer.plot_threshold_comparison_summary(all_loop_results)
+    
+    print(f"\n🎉 ENHANCED LOOP WITH LEVERAGE COMPLETED!")
+    print(f"📄 Results saved in: {report_path}")
+    print(f"📊 Total strategies evaluated: {len(all_loop_results)}")
+    print(f"💰 Leverage impact included in all CNN-LSTM strategies")
 
-def print_detailed_results(eval_metrics, trading_results, config):
-    # This function is unchanged but included for completeness.
-    """Print detailed results summary"""
-    print("\n📈 MODEL PERFORMANCE SUMMARY")
-    print("-" * 50)
-    print(f"Model Type: {config.MODEL_TYPE}")
-    for key, val in eval_metrics.items():
-        if isinstance(val, (int, float)): print(f"{key.replace('_', ' ').title():<12}: {val:.4f}")
+def analyze_model_predictions(predictions, model_type, target_pair, config):
+    """
+    Analyze and display detailed prediction statistics and signal distribution.
     
-    print("\n💼 TRADING STRATEGY PERFORMANCE")
-    header = f"{'Strategy':<45} {'Trades':<8} {'Return%':<10} {'Win Rate':<10} {'Sharpe':<10} {'Max DD%':<10} {'Final $':<12}"
-    print("-" * len(header))
-    print(header)
-    print("-" * len(header))
+    Args:
+        predictions: numpy array of model predictions (0-1 values)
+        model_type: str, 'multi' or single currency
+        target_pair: str, target currency pair
+        config: Config object with threshold settings
+    """
     
-    sorted_results = sorted(trading_results.items(), key=lambda item: item[1].get('performance', {}).get('total_return_pct', -9e9), reverse=True)
-    for name, result in sorted_results:
-        perf = result.get('performance', result)
-        print(f"{name:<45} {perf.get('total_trades', 0):<8} "
-              f"{perf.get('total_return_pct', 0):<10.2f} {perf.get('win_rate', 0):<10.4f} "
-              f"{perf.get('sharpe_ratio', 0):<10.4f} {perf.get('max_drawdown_pct', 0):<10.2f} "
-              f"${perf.get('final_capital', config.INITIAL_CAPITAL):<11,.2f}")
-    print("-" * len(header))
+    # Calculate prediction statistics
+    pred_min = predictions.min()
+    pred_max = predictions.max()
+    pred_mean = predictions.mean()
+    pred_std = predictions.std()
     
-    if sorted_results:
-        best_name, best_res = sorted_results[0]
-        print(f"\n🏆 Best performing strategy: {best_name} (Return: {best_res.get('performance', best_res).get('total_return_pct', 0):.2f}%)")
+    print(f"\n  📊 Model Prediction Analysis:")
+    print(f"      • Prediction range: [{pred_min:.3f}, {pred_max:.3f}]")
+    print(f"      • Mean: {pred_mean:.3f}, Std: {pred_std:.3f}")
+    
+    # Calculate signal distribution for all thresholds
+    print(f"      • Trading signals generated:")
+    
+    for threshold_name, thresholds in config.THRESHOLDS.items():
+        buy_threshold = thresholds['buy']
+        sell_threshold = thresholds['sell']
+        
+        # Count signals
+        buy_signals = np.sum(predictions >= buy_threshold)
+        sell_signals = np.sum(predictions <= sell_threshold)
+        hold_signals = len(predictions) - buy_signals - sell_signals
+        
+        total_predictions = len(predictions)
+        buy_pct = (buy_signals / total_predictions) * 100
+        sell_pct = (sell_signals / total_predictions) * 100
+        hold_pct = (hold_signals / total_predictions) * 100
+        
+        leverage = config.LEVERAGE_SETTINGS[threshold_name]
+        
+        print(f"        {threshold_name} (Leverage {leverage}x):")
+        print(f"          - HOLD: {hold_signals} ({hold_pct:.1f}%)")
+        print(f"          - SELL: {sell_signals} ({sell_pct:.1f}%)")
+        print(f"          - BUY:  {buy_signals} ({buy_pct:.1f}%)")
+    
+    return {
+        'pred_range': [pred_min, pred_max],
+        'pred_stats': {'mean': pred_mean, 'std': pred_std},
+        'signal_counts': {
+            threshold_name: {
+                'buy': np.sum(predictions >= thresholds['buy']),
+                'sell': np.sum(predictions <= thresholds['sell']),
+                'hold': len(predictions) - np.sum(predictions >= thresholds['buy']) - np.sum(predictions <= thresholds['sell'])
+            }
+            for threshold_name, thresholds in config.THRESHOLDS.items()
+        }
+    }
+
+def train_and_evaluate_model_multiple_thresholds(variation, config_base, processed_data, use_test_set, unattended_mode):
+    """Enhanced function with prediction analysis, multiple threshold evaluation and leverage support."""
+    
+    model_type, target_pair = variation['model_type'], variation['target_pair']
+    run_name = f"{model_type}_target_{target_pair}" if model_type == 'multi' else model_type
+    print(f"\n--- Processing: {run_name.upper()} ---")
+
+    run_config = Config(model_type=model_type, target_pair=target_pair)
+    run_config.RESULTS_PATH = f'results/model_runs/{run_name}/'
+    run_config.MODELS_PATH = f'models/{run_name}/'
+    run_config._create_directories()
+        
+    dp = DataProcessor(run_config)
+    model_input = dp.get_model_input_data(processed_data)
+    (train_data, eval_data) = SequencePreparator(run_config).create_sequences_and_splits(model_input, processed_data, use_test_set)
+    
+    (X_train, y_train), (X_eval, y_eval, ts_eval) = train_data, eval_data
+    if len(X_eval) == 0: 
+        print(f"⚠️ No evaluation data for {run_name}")
+        return {}
+    
+    # Train model
+    model = CNNLSTMModel(run_config)
+    history = model.train((X_train, y_train), (X_eval, y_eval))
+    
+    # Plot training curves
+    visualizer = ForexVisualizer(run_config, unattended_mode=unattended_mode)
+    visualizer.plot_training_curves(history)
+
+    # Get predictions
+    predictions = model.model.predict(X_eval).flatten()
+    eval_prices = processed_data[run_config.TARGET_PAIR]['Close'].reindex(ts_eval)
+    
+    # ✅ NEW: Analyze predictions and show signal distribution
+    analyze_model_predictions(predictions, model_type, target_pair, run_config)
+    
+    # Generate signals for all thresholds
+    threshold_signals = get_cnn_lstm_signals_multiple_thresholds(run_config, predictions)
+    
+    results = {}
+    key_prefix = 'Multi-CNN-LSTM' if run_config.MODEL_TYPE == 'multi' else 'Single-CNN-LSTM'
+    
+    # Evaluate each threshold separately WITH LEVERAGE
+    print(f"  🎯 Evaluating {len(threshold_signals)} thresholds with leverage:")
+    for threshold_name, signals in threshold_signals.items():
+        # ✅ เพิ่ม strategy_threshold parameter สำหรับ leverage
+        simulator = TradingSimulator(run_config, eval_prices, strategy_threshold=threshold_name)
+        performance = simulator.run(signals)
+        
+        # Create unique key for each threshold
+        strategy_key = f"{key_prefix}-{threshold_name} ({run_config.TARGET_PAIR})"
+        results[strategy_key] = performance
+        
+        # ✅ แสดงข้อมูล leverage ในการรายงาน
+        leverage = simulator.portfolio.current_leverage
+        print(f"    └─ {threshold_name} (Leverage {leverage}x): Return={performance['total_return_pct']:.2f}%, "
+              f"Sharpe={performance['sharpe_ratio']:.2f}, Trades={performance['total_trades']}")
+    
+    return results
+
+def evaluate_baselines(config, processed_data, currency_pair, use_test_set):
+    """Calculates performance for baseline strategies with moderate leverage (1.0x)."""
+    eval_set_start = config.TEST_START if use_test_set else config.VAL_START
+    eval_set_end = config.TEST_END if use_test_set else config.VAL_END
+    
+    processor = DataProcessor(config)
+    price_data = processor.get_price_data_for_period(processed_data, currency_pair, eval_set_start, eval_set_end)
+    if price_data.empty: 
+        print(f"⚠️ No price data for {currency_pair}")
+        return {}
+
+    eval_prices = price_data['Close']
+    
+    run_config = Config(model_type=currency_pair, target_pair=currency_pair)
+    
+    # Calculate baseline strategies with moderate leverage (1.0x)
+    baseline_results = {}
+    
+    try:
+        # ✅ เพิ่ม strategy_threshold='Moderate' สำหรับ leverage 1.0x
+        sim = TradingSimulator(run_config, eval_prices, strategy_threshold='Moderate')
+        performance = sim.run(get_buy_and_hold_signals(eval_prices))
+        baseline_results[f'Buy & Hold ({currency_pair})'] = performance
+        print(f"  ✅ Buy & Hold: Return={performance['total_return_pct']:.2f}%, Leverage={performance.get('avg_leverage', 1.0):.1f}x")
+    except Exception as e:
+        print(f"⚠️ Error calculating Buy & Hold for {currency_pair}: {e}")
+    
+    try:
+        # ✅ เพิ่ม strategy_threshold='Moderate' สำหรับ leverage 1.0x
+        sim = TradingSimulator(run_config, eval_prices, strategy_threshold='Moderate')
+        performance = sim.run(get_rsi_signals(run_config, price_data['RSI']))
+        baseline_results[f'RSI-based Trading ({currency_pair})'] = performance
+        print(f"  ✅ RSI Strategy: Return={performance['total_return_pct']:.2f}%, Leverage={performance.get('avg_leverage', 1.0):.1f}x")
+    except Exception as e:
+        print(f"⚠️ Error calculating RSI strategy for {currency_pair}: {e}")
+    
+    try:
+        # ✅ เพิ่ม strategy_threshold='Moderate' สำหรับ leverage 1.0x
+        sim = TradingSimulator(run_config, eval_prices, strategy_threshold='Moderate')
+        performance = sim.run(get_macd_signals(run_config, price_data['MACD'], price_data['MACD_Signal']))
+        baseline_results[f'MACD-based Trading ({currency_pair})'] = performance
+        print(f"  ✅ MACD Strategy: Return={performance['total_return_pct']:.2f}%, Leverage={performance.get('avg_leverage', 1.0):.1f}x")
+    except Exception as e:
+        print(f"⚠️ Error calculating MACD strategy for {currency_pair}: {e}")
+    
+    print(f"  ✅ Calculated {len(baseline_results)} baseline strategies for {currency_pair}")
+    return baseline_results
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Multi-Currency CNN-LSTM Forex Prediction', formatter_class=argparse.RawTextHelpFormatter)
-    
-    # Use the main parser, not the temporary one
-    parser.add_argument('--model', type=str, choices=['multi', 'EURUSD', 'GBPUSD', 'USDJPY', 'all'], default='all', help='Model type to train.')
-    parser.add_argument('--step', type=int, choices=range(1, 7), help='Start from specific step (1-6) for a single model run.')
-    parser.add_argument('--test', action='store_true', help='Use test set for final evaluation instead of validation set.')
-    parser.add_argument('--new', action='store_true', help="Start a fresh run for a single model, deleting its checkpoint.")
-    parser.add_argument('--visualize-only', action='store_true', help='Skip training. Load saved results and generate comparison visualizations.')
-    # <<< เพิ่ม Argument ใหม่ >>>
-    parser.add_argument('--unattended', action='store_true', help='Run in non-interactive mode. Skips user prompts and does not display plot windows.')
-
+    parser = argparse.ArgumentParser(description='Run enhanced Forex CNN-LSTM experiment with leverage support.')
+    parser.add_argument('--test', action='store_true', help='Use test set instead of validation set for evaluation.')
+    parser.add_argument('--unattended', action='store_true', help='Run in non-interactive mode (saves plots without showing).')
     args = parser.parse_args()
+
+    base_config = Config()
     
-    run_pipeline(args)
+    print("="*80)
+    print("🚀 ENHANCED FOREX CNN-LSTM PREDICTION SYSTEM WITH LEVERAGE")
+    print("="*80)
+    eval_period_name = "TEST" if args.test else "VALIDATION"
+    eval_start = base_config.TEST_START if args.test else base_config.VAL_START
+    eval_end = base_config.TEST_END if args.test else base_config.VAL_END
+    print(f"📅 Evaluation Period: {eval_start} to {eval_end} ({eval_period_name})")
+    print(f"🎯 Trading Thresholds: {list(base_config.THRESHOLDS.keys())}")
+    print(f"💰 Leverage Configuration:")
+    print(f"   • Conservative: 2.0x leverage (High confidence)")
+    print(f"   • Moderate:     1.0x leverage (Standard)")
+    print(f"   • Aggressive:   0.5x leverage (Low confidence)")
+    print(f"💱 Currency Pairs: {base_config.ALL_CURRENCY_PAIRS}")
+    print(f"🤖 Model Variations: Multi-Currency + Single-Currency for each pair")
+    print("="*80)
+
+    try:
+        run_complete_loop(base_config, use_test_set=args.test, unattended_mode=args.unattended)
+        print(f"\n✅ EXPERIMENT WITH LEVERAGE COMPLETED SUCCESSFULLY!")
+        print(f"📊 Check results in: results/final_report_for_val_{base_config.VAL_START}_to_{base_config.VAL_END}/")
+        print(f"💰 All CNN-LSTM strategies now include realistic leverage effects")
+        
+    except Exception as e:
+        print(f"\n❌ EXPERIMENT FAILED: {str(e)}")
+        import traceback
+        traceback.print_exc()

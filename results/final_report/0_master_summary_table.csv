@@ -1,0 +1,6 @@
+Strategy,Avg. Total Return (%),Avg. Sharpe Ratio,Avg. Win Rate,Avg. Max Drawdown (%),Avg. Total Trades
+Multi-CNN-LSTM,-0.1048,-0.2183,0.2256,1.9954,75.3056
+Single-CNN-LSTM,0.2657,2.3499,0.1781,1.4221,65.9352
+Buy & Hold,0.0000,0.0000,0.0000,0.0000,0.0000
+RSI-based Trading,0.0000,0.0000,0.0000,0.0000,0.0000
+MACD-based Trading,0.0000,0.0000,0.0000,0.0000,0.0000

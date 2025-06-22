@@ -1,9 +1,7 @@
 """
-Data Processor for Multi-Currency CNN-LSTM Forex Prediction
-Enhanced version with Single Currency support
-Technical indicators are calculated but NOT used as model input
+Enhanced Data Processor with proper Volume processing (7SD) and separated Technical Indicators
+Updated to prevent data leakage and ensure Train Set statistics only
 """
-
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
@@ -11,351 +9,427 @@ import warnings
 warnings.filterwarnings('ignore')
 
 class DataProcessor:
-    """Enhanced data processor for multi and single currency forex data"""
-    
     def __init__(self, config):
         self.config = config
-        self.scalers = {}
         
-    def load_currency_data(self, verbose=True):
-        """Load OHLCV data for configured currency pairs"""
-        if verbose:
-            print(f"📊 Loading currency data for {self.config.MODEL_TYPE} model...")
-        
+    def load_currency_data(self):
+        """Load currency data from CSV files."""
+        print("📥 Loading currency data...")
         data = {}
-        for pair in self.config.CURRENCY_PAIRS:
+        
+        for pair in self.config.ALL_CURRENCY_PAIRS:
             try:
-                file_path = f"{self.config.DATA_PATH}{pair}_1H.csv"
-                df = pd.read_csv(file_path)
+                # Load from data/ folder
+                filename = f"data/{pair}_1H.csv"
+                df = pd.read_csv(filename)
                 
-                if verbose:
-                    print(f"   📈 {pair}: {df.shape[0]} records loaded")
+                # Convert timestamp with proper format handling
+                # Format: "13.01.2018 00:00:00.000 GMT+0700"
+                try:
+                    df['Local time'] = pd.to_datetime(df['Local time'], format='%d.%m.%Y %H:%M:%S.%f GMT%z')
+                except ValueError:
+                    # Fallback: try different formats
+                    try:
+                        df['Local time'] = pd.to_datetime(df['Local time'], format='%d.%m.%Y %H:%M:%S.%f %Z%z')
+                    except ValueError:
+                        # Final fallback: let pandas infer
+                        print(f"   ⚠️ Using automatic date parsing for {pair}")
+                        df['Local time'] = pd.to_datetime(df['Local time'], infer_datetime_format=True)
                 
-                # Handle datetime parsing with multiple strategies
-                df['Local time'] = self._parse_datetime(df['Local time'])
-                
-                # Set index and sort
+                # Convert to UTC and set as index
+                if df['Local time'].dt.tz is not None:
+                    df['Local time'] = df['Local time'].dt.tz_convert('UTC')
+                else:
+                    df['Local time'] = df['Local time'].dt.tz_localize('UTC')
+                    
                 df.set_index('Local time', inplace=True)
+                
+                # Sort by timestamp
                 df.sort_index(inplace=True)
                 
+                # Verify required columns
+                required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+                if not all(col in df.columns for col in required_cols):
+                    print(f"❌ Missing required columns in {filename}")
+                    print(f"   Available columns: {list(df.columns)}")
+                    print(f"   Required columns: {required_cols}")
+                    return None
+                
+                # Check data quality
+                total_rows = len(df)
+                if total_rows < self.config.MIN_DATA_POINTS:
+                    print(f"⚠️ {pair}: Only {total_rows} rows (minimum: {self.config.MIN_DATA_POINTS})")
+                
+                # Check for missing values
+                missing_pct = (df[required_cols].isnull().sum().sum() / (len(df) * len(required_cols))) * 100
+                if missing_pct > self.config.MAX_MISSING_DATA_PCT:
+                    print(f"⚠️ {pair}: {missing_pct:.1f}% missing data (max allowed: {self.config.MAX_MISSING_DATA_PCT}%)")
+                
                 data[pair] = df
+                print(f"   ✅ {pair}: {len(df)} records loaded ({df.index[0]} to {df.index[-1]})")
                 
-                if verbose:
-                    print(f"   📅 {pair}: {df.index.min()} to {df.index.max()}")
-                
-            except Exception as e:
-                print(f"   ❌ Error loading {pair}: {str(e)}")
+            except FileNotFoundError:
+                print(f"❌ File not found: {filename}")
+                print(f"   Please ensure CSV files are in the 'data/' folder")
                 return None
+            except pd.errors.EmptyDataError:
+                print(f"❌ Empty CSV file: {filename}")
+                return None
+            except Exception as e:
+                print(f"❌ Error loading {pair}: {e}")
+                print(f"   File: {filename}")
+                # Print first few lines for debugging
+                try:
+                    with open(filename, 'r') as f:
+                        print(f"   First 3 lines of {filename}:")
+                        for i, line in enumerate(f):
+                            if i < 3:
+                                print(f"     {line.strip()}")
+                            else:
+                                break
+                except:
+                    pass
+                return None
+        
+        print(f"✅ Successfully loaded {len(data)} currency pairs")
+        
+        # Validate data consistency
+        self._validate_data_consistency(data)
         
         return data
     
-    def _parse_datetime(self, datetime_series):
-        """Parse datetime with multiple fallback strategies"""
-        try:
-            # Strategy 1: Direct conversion
-            return pd.to_datetime(datetime_series, infer_datetime_format=True)
-        except:
-            try:
-                # Strategy 2: Remove timezone and milliseconds
-                cleaned = datetime_series.astype(str)
-                cleaned = cleaned.str.replace(r' GMT[+-]\d{4}', '', regex=True)
-                cleaned = cleaned.str.replace(r'\.000', '', regex=True)
-                return pd.to_datetime(cleaned, format='%d.%m.%Y %H:%M:%S')
-            except:
-                try:
-                    # Strategy 3: Day first parsing
-                    cleaned = datetime_series.astype(str)
-                    cleaned = cleaned.str.replace(r' GMT[+-]\d{4}', '', regex=True)
-                    cleaned = cleaned.str.replace(r'\.000', '', regex=True)
-                    return pd.to_datetime(cleaned, dayfirst=True)
-                except Exception as e:
-                    raise ValueError(f"All datetime parsing strategies failed: {str(e)}")
-    
-    def preprocess_data(self, data, verbose=True):
-        """
-        Preprocess data: handle missing values, calculate returns
-        IMPORTANT: Technical indicators are calculated but NOT included in model features
-        """
-        if verbose:
-            print("🔧 Preprocessing data...")
+    def _validate_data_consistency(self, data):
+        """Validate loaded data for consistency and quality"""
+        print("🔍 Validating data consistency...")
         
+        if not data:
+            print("❌ No data loaded")
+            return False
+        
+        # Check date ranges
+        date_ranges = {}
+        for pair, df in data.items():
+            date_ranges[pair] = {
+                'start': df.index.min(),
+                'end': df.index.max(),
+                'count': len(df)
+            }
+            print(f"   📅 {pair}: {date_ranges[pair]['start']} to {date_ranges[pair]['end']} ({date_ranges[pair]['count']} records)")
+        
+        # Check for sufficient overlap
+        all_starts = [info['start'] for info in date_ranges.values()]
+        all_ends = [info['end'] for info in date_ranges.values()]
+        
+        common_start = max(all_starts)
+        common_end = min(all_ends)
+        
+        if common_start >= common_end:
+            print("⚠️ Warning: No overlapping time period between all currency pairs")
+        else:
+            print(f"   ✅ Common time period: {common_start} to {common_end}")
+        
+        # Check for data gaps
+        for pair, df in data.items():
+            # Check for large gaps (more than 2 hours)
+            time_diffs = df.index.to_series().diff()
+            large_gaps = time_diffs > pd.Timedelta(hours=2)
+            if large_gaps.any():
+                gap_count = large_gaps.sum()
+                print(f"   ⚠️ {pair}: {gap_count} time gaps > 2 hours detected")
+        
+        return True
+    
+    def preprocess_data(self, raw_data):
+        """
+        Preprocess currency data with proper Train Set statistics isolation.
+        IMPORTANT: Technical Indicators (RSI, MACD) are calculated but NOT included in model input.
+        """
+        print("🔄 Preprocessing currency data...")
         processed_data = {}
         
-        for pair, df in data.items():
-            # Handle missing values
-            df = df.fillna(method='ffill').fillna(method='bfill')
+        for pair, df in raw_data.items():
+            print(f"   Processing {pair}...")
+            df_processed = df.copy()
             
-            # IMPORTANT: Only OHLCV will be used for model training
-            # Calculate percentage returns for OHLC (making data stationary)
+            # Step 1: Convert OHLC to percentage change (renamed from _Return to _Changed)
             for col in ['Open', 'High', 'Low', 'Close']:
-                df[f'{col}_Return'] = df[col].pct_change().fillna(0)
-                df[f'{col}_Price'] = df[col]  # Keep original prices for trading
+                df_processed[f'{col}_Changed'] = df_processed[col].pct_change()
             
-            # Keep original volume for normalization
-            df['Volume_Original'] = df['Volume']
+            # Step 2: Calculate Technical Indicators (for baseline strategies only)
+            df_processed = self._calculate_technical_indicators(df_processed)
             
-            # Calculate technical indicators ONLY for trading simulation
-            # These will NOT be included in model features
-            df = self._calculate_technical_indicators_for_trading(df)
+            # Step 3: Remove rows with NaN values
+            df_processed.dropna(inplace=True)
             
-            processed_data[pair] = df
-            
-            if verbose:
-                print(f"   ✅ {pair}: Preprocessing completed (OHLCV only for model)")
+            processed_data[pair] = df_processed
+            print(f"      ✅ {pair}: {len(df_processed)} records after preprocessing")
         
         return processed_data
     
-    def _calculate_technical_indicators_for_trading(self, df):
-        """
-        Calculate RSI and MACD indicators for trading simulation ONLY
-        These are NOT used as model input features
-        """
+    def _calculate_technical_indicators(self, df):
+        """Calculate RSI and MACD for baseline strategies (NOT for model input)"""
+        
         # RSI Calculation
         close_delta = df['Close'].diff()
-        gain = close_delta.where(close_delta > 0, 0)
-        loss = -close_delta.where(close_delta < 0, 0)
-        
-        avg_gain = gain.rolling(window=self.config.RSI_PERIOD).mean()
-        avg_loss = loss.rolling(window=self.config.RSI_PERIOD).mean()
-        
-        rs = avg_gain / avg_loss
+        gain = (close_delta.where(close_delta > 0, 0)).rolling(window=self.config.RSI_PERIOD).mean()
+        loss = (-close_delta.where(close_delta < 0, 0)).rolling(window=self.config.RSI_PERIOD).mean()
+        rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
-        df['RSI'].fillna(50, inplace=True)  # Neutral RSI for initial values
         
         # MACD Calculation
         exp1 = df['Close'].ewm(span=self.config.MACD_FAST, adjust=False).mean()
         exp2 = df['Close'].ewm(span=self.config.MACD_SLOW, adjust=False).mean()
         df['MACD'] = exp1 - exp2
         df['MACD_Signal'] = df['MACD'].ewm(span=self.config.MACD_SIGNAL, adjust=False).mean()
-        df['MACD_Histogram'] = df['MACD'] - df['MACD_Signal']
         
-        # Fill any NaN values
-        df['MACD'].fillna(0, inplace=True)
-        df['MACD_Signal'].fillna(0, inplace=True)
-        df['MACD_Histogram'].fillna(0, inplace=True)
+        # Fill NaN values
+        df.fillna(method='bfill', inplace=True, limit=100)
+        df.fillna(method='ffill', inplace=True, limit=100)
         
         return df
     
-    def create_unified_dataset(self, processed_data, verbose=True):
+    def get_model_input_data(self, processed_data, loop_info=None):
         """
-        Create unified dataset - ONLY OHLCV features for model input
-        Multi-currency: 15 features (OHLCV * 3 pairs)
-        Single currency: 5 features (OHLCV * 1 pair)
+        Creates the final DataFrame for model input with ONLY OHLCV features.
+        Uses Train Set statistics for scaling to prevent data leakage.
+        
+        Args:
+            processed_data: Preprocessed data dictionary
+            loop_info: Dictionary containing train/val/test periods (optional for backward compatibility)
         """
-        if verbose:
+        # Backward compatibility: create loop_info from config if not provided
+        # Note: This is NOT fake data - it uses the actual config time periods
+        # instead of rolling window periods, allowing main_fx.py to work with fixed periods
+        if loop_info is None:
+            loop_info = {
+                'loop': 1,
+                'train_start': self.config.TRAIN_START,
+                'train_end': self.config.TRAIN_END,
+                'val_start': self.config.VAL_START,
+                'val_end': self.config.VAL_END
+            }
+            print("⚠️ Using config periods (main_fx.py compatibility mode - using actual config dates, not rolling window)")
+        
+        print(f"🎯 Creating model input data for Loop {loop_info.get('loop', 'N/A')}...")
+        
+        features_list = []
+        final_columns = []
+        
+        # Get train period for statistics calculation
+        train_start = pd.to_datetime(loop_info['train_start'], utc=True)
+        train_end = pd.to_datetime(loop_info['train_end'], utc=True)
+        
+        print(f"      📊 Using Train period: {train_start.date()} to {train_end.date()}")
+        
+        # Collect train data for volume statistics
+        train_volume_stats = {}
+        
+        for pair in self.config.INPUT_CURRENCY_PAIRS:
+            df = processed_data[pair].copy()
+            
+            # Step 1: Process Volume with 7SD capping using ONLY Train Set statistics
+            train_mask = (df.index >= train_start) & (df.index <= train_end)
+            train_data = df[train_mask]
+            
+            if len(train_data) == 0:
+                print(f"⚠️ No training data for {pair} in specified period")
+                continue
+            
+            # Calculate Volume statistics from Train Set only
+            train_volume = train_data['Volume']
+            mean_train = train_volume.mean()
+            std_train = train_volume.std()
+            upper_limit = mean_train + 7 * std_train  # Use 7SD as specified
+            
+            print(f"      📊 {pair} Volume stats from Train Set:")
+            print(f"         Mean: {mean_train:.2f}, SD: {std_train:.2f}, Upper Limit (7SD): {upper_limit:.2f}")
+            
+            # Apply capping to ALL data (train/val/test)
+            df['Volume_Capped'] = np.minimum(df['Volume'], upper_limit)
+            
+            # Calculate Min-Max scaling parameters from Train Set capped volume
+            train_volume_capped = df.loc[train_mask, 'Volume_Capped']
+            min_train = train_volume_capped.min()
+            max_train = train_volume_capped.max()
+            
+            # Apply Min-Max scaling to ALL data
+            if max_train > min_train:
+                df['Volume_Scaled'] = (df['Volume_Capped'] - min_train) / (max_train - min_train)
+            else:
+                df['Volume_Scaled'] = 0.0
+            
+            # Step 2: Select ONLY OHLCV features for model input (NO Technical Indicators)
             if self.config.MODEL_TYPE == 'multi':
-                print("🔗 Creating unified multi-currency dataset (OHLCV only)...")
+                # Multi-currency model: include all pairs
+                pair_features = df[['Open_Changed', 'High_Changed', 'Low_Changed', 'Close_Changed', 'Volume_Scaled']]
+                # Prefix column names for multi-model
+                new_cols = {col: f'{pair}_{col}' for col in pair_features.columns}
+                pair_features = pair_features.rename(columns=new_cols)
             else:
-                print(f"🔗 Creating single-currency dataset for {self.config.MODEL_TYPE} (OHLCV only)...")
+                # Single-currency model: use only specified pair
+                if pair == self.config.MODEL_TYPE:
+                    pair_features = df[['Open_Changed', 'High_Changed', 'Low_Changed', 'Close_Changed', 'Volume_Scaled']]
+                else:
+                    continue
+            
+            features_list.append(pair_features)
+            final_columns.extend(pair_features.columns)
+            
+            print(f"      ✅ {pair}: Features prepared for model input")
         
-        # Find common timestamps across all pairs
-        common_index = None
-        for pair, df in processed_data.items():
-            if common_index is None:
-                common_index = df.index
+        if not features_list:
+            print("❌ No features prepared for model")
+            return None
+        
+        # Combine all features
+        unified_df = pd.concat(features_list, axis=1, join='inner').dropna()
+        
+        # Step 3: Apply Standard Scaler to OHLC_Changed features using Train Set statistics
+        train_mask_unified = (unified_df.index >= train_start) & (unified_df.index <= train_end)
+        train_data_unified = unified_df[train_mask_unified]
+        
+        if len(train_data_unified) == 0:
+            print("❌ No training data available for scaling")
+            return None
+        
+        # Scale OHLC features only (Volume already scaled)
+        scaler = StandardScaler()
+        
+        # Identify OHLC columns (exclude Volume_Scaled columns)
+        ohlc_columns = [col for col in unified_df.columns if not col.endswith('_Volume_Scaled')]
+        volume_columns = [col for col in unified_df.columns if col.endswith('_Volume_Scaled')]
+        
+        if ohlc_columns:
+            # Fit scaler on train data only
+            scaler.fit(train_data_unified[ohlc_columns])
+            
+            # Transform all data using train statistics
+            scaled_ohlc = scaler.transform(unified_df[ohlc_columns])
+            scaled_ohlc_df = pd.DataFrame(scaled_ohlc, index=unified_df.index, columns=ohlc_columns)
+            
+            # Combine scaled OHLC with already scaled Volume
+            if volume_columns:
+                final_df = pd.concat([scaled_ohlc_df, unified_df[volume_columns]], axis=1)
             else:
-                common_index = common_index.intersection(df.index)
+                final_df = scaled_ohlc_df
+        else:
+            final_df = unified_df
         
-        if verbose:
-            print(f"   📅 Common timestamps: {len(common_index)}")
+        # Ensure correct column order
+        final_df = final_df[final_columns]
         
-        # Create unified feature matrix with FIXED ORDER (prevents data leakage)
-        unified_features = []
-        feature_columns = []
+        print(f"      🎯 Final model input shape: {final_df.shape}")
+        print(f"      📊 Features: {list(final_df.columns)}")
+        print(f"      ⚠️ NOTE: RSI/MACD are calculated but NOT included in model input")
         
-        for pair in self.config.CURRENCY_PAIRS:  # Use config order
-            df = processed_data[pair].loc[common_index]
-            
-            # IMPORTANT: Only select OHLCV features for model input
-            # Technical indicators are NOT included
-            pair_features = ['Open_Return', 'High_Return', 'Low_Return', 'Close_Return', 'Volume_Original']
-            pair_data = df[pair_features]
-            
-            # Rename columns with pair prefix (only for multi-currency)
-            if self.config.MODEL_TYPE == 'multi':
-                pair_data.columns = [f'{pair}_{col}' for col in pair_data.columns]
-            else:
-                # For single currency, use simple column names
-                pair_data.columns = pair_features
-            
-            unified_features.append(pair_data)
-            feature_columns.extend(pair_data.columns)
-        
-        # Concatenate all features
-        unified_df = pd.concat(unified_features, axis=1)
-        
-        # Normalize features
-        unified_df = self._normalize_features(unified_df)
-        
-        if verbose:
-            print(f"   ✅ Unified dataset: {unified_df.shape[0]} samples × {unified_df.shape[1]} features")
-            print(f"   📊 Expected shape: (samples, {self.config.TOTAL_FEATURES})")
-            print(f"   ⚠️  Technical indicators calculated but NOT included in model features")
-        
-        return unified_df, feature_columns
+        return final_df
     
-    def _normalize_features(self, df):
+    def get_model_input_data_legacy(self, processed_data):
         """
-        Normalize features using appropriate scalers
-        OHLC Returns: StandardScaler (zero mean, unit variance)
-        Volume: MinMaxScaler (0-1 range)
+        Legacy wrapper for backward compatibility with main_fx.py
+        Uses config periods instead of loop_info
         """
-        normalized_df = df.copy()
-        
-        for col in df.columns:
-            if 'Return' in col:
-                # Use StandardScaler for returns (zero mean, unit variance)
-                scaler = StandardScaler()
-                normalized_df[col] = scaler.fit_transform(df[[col]]).flatten()
-                self.scalers[col] = scaler
-            elif 'Volume' in col:
-                # Use MinMaxScaler for volume (0-1 range)
-                scaler = MinMaxScaler()
-                normalized_df[col] = scaler.fit_transform(df[[col]]).flatten()
-                self.scalers[col] = scaler
-        
-        return normalized_df
+        return self.get_model_input_data(processed_data, loop_info=None)
     
-    def get_price_data(self, processed_data, timestamps, target_pair=None):
-        """Extract price data for trading strategy evaluation"""
-        if target_pair is None:
-            target_pair = self.config.TARGET_PAIR
-        
-        target_data = processed_data[target_pair].loc[timestamps]
-        return target_data
-    
-    def get_technical_indicators(self, processed_data, timestamps, target_pair=None):
+    def get_technical_indicators_for_baseline(self, processed_data, currency_pair, start_date, end_date):
         """
-        Extract technical indicators for baseline trading strategies
-        These are ONLY used for trading simulation, NOT for model training
+        Extract technical indicators for baseline strategies only.
+        This is separate from model input and used only for RSI/MACD strategies.
         """
-        if target_pair is None:
-            target_pair = self.config.TARGET_PAIR
+        target_df = processed_data[currency_pair]
+        start_dt = pd.to_datetime(start_date, utc=True)
+        end_dt = pd.to_datetime(end_date, utc=True)
         
-        target_data = processed_data[target_pair].loc[timestamps]
+        period_data = target_df[(target_df.index >= start_dt) & (target_df.index <= end_dt)]
+        
         return {
-            'RSI': target_data['RSI'],
-            'MACD': target_data['MACD'],
-            'MACD_Signal': target_data['MACD_Signal'],
-            'MACD_Histogram': target_data['MACD_Histogram']
+            'RSI': period_data['RSI'],
+            'MACD': period_data['MACD'], 
+            'MACD_Signal': period_data['MACD_Signal']
         }
     
-    def save_scalers(self, filepath):
-        """Save scalers for future use"""
-        import pickle
-        with open(filepath, 'wb') as f:
-            pickle.dump(self.scalers, f)
-        print(f"✅ Scalers saved to {filepath}")
-    
-    def load_scalers(self, filepath):
-        """Load saved scalers"""
-        import pickle
-        with open(filepath, 'rb') as f:
-            self.scalers = pickle.load(f)
-        print(f"✅ Scalers loaded from {filepath}")
+    def get_price_data_for_period(self, processed_data, target_pair, start_date, end_date):
+        """Robustly extracts price data for a given period by filtering the UTC index."""
+        target_df = processed_data[target_pair]
+        start_dt = pd.to_datetime(start_date, utc=True)
+        end_dt = pd.to_datetime(end_date, utc=True)
+        return target_df[(target_df.index >= start_dt) & (target_df.index <= end_dt)]
 
+# ==================================================================
+# SequencePreparator Class - Enhanced for proper Test Set support
+# ==================================================================
 class SequencePreparator:
-    """Create sequences for CNN-LSTM training - works for both multi and single currency"""
-    
     def __init__(self, config):
         self.config = config
     
-    def create_sequences(self, unified_data, target_pair=None, verbose=True):
+    def create_sequences_and_splits(self, model_input_data, processed_data, use_test_set=False):
         """
-        Create sliding window sequences and labels
-        Input shape:
-        - Multi-currency: (batch, 60, 15) - OHLCV * 3 pairs
-        - Single currency: (batch, 60, 5) - OHLCV * 1 pair
+        Creates sequences from input data and splits them into train/eval sets.
+        Enhanced to support both Validation and Test Set evaluation.
         """
-        if target_pair is None:
-            target_pair = self.config.TARGET_PAIR
+        print(f"🔢 Creating sequences for target: {self.config.TARGET_PAIR}...")
+        
+        target_returns = processed_data[self.config.TARGET_PAIR]['Close'].pct_change().reindex(model_input_data.index).fillna(0)
+        
+        X, y, timestamps = [], [], []
+        for i in range(len(model_input_data) - self.config.WINDOW_SIZE):
+            X.append(model_input_data.iloc[i:i + self.config.WINDOW_SIZE].values)
+            y.append(1 if target_returns.iloc[i + self.config.WINDOW_SIZE] > 0 else 0)
+            timestamps.append(model_input_data.index[i + self.config.WINDOW_SIZE])
             
-        if verbose:
-            print(f"📋 Creating sequences for {target_pair} prediction...")
-            print(f"   📊 Data shape: {unified_data.shape}")
-            print(f"   📅 Period: {unified_data.index.min()} to {unified_data.index.max()}")
-            print(f"   ⚠️  Using OHLCV features only (no technical indicators)")
+        X, y, timestamps = np.array(X, dtype=np.float32), np.array(y, dtype=np.float32), pd.DatetimeIndex(timestamps)
         
-        # Get feature matrix and target column
-        feature_matrix = unified_data.values
+        # Define periods with fallback to config defaults
+        train_start = pd.to_datetime(getattr(self.config, 'TRAIN_START', '2019-01-01'), utc=True)
+        train_end = pd.to_datetime(getattr(self.config, 'TRAIN_END', '2020-12-31'), utc=True)
         
-        # Determine target column based on model type
-        if self.config.MODEL_TYPE == 'multi':
-            target_column = f'{target_pair}_Close_Return'
+        if use_test_set:
+            eval_start = pd.to_datetime(getattr(self.config, 'TEST_START', '2021-02-01'), utc=True)
+            eval_end = pd.to_datetime(getattr(self.config, 'TEST_END', '2021-02-28'), utc=True)
+            eval_set_name = "Test"
         else:
-            target_column = 'Close_Return'
+            eval_start = pd.to_datetime(getattr(self.config, 'VAL_START', '2021-01-01'), utc=True)
+            eval_end = pd.to_datetime(getattr(self.config, 'VAL_END', '2021-01-31'), utc=True)
+            eval_set_name = "Validation"
         
-        if target_column not in unified_data.columns:
-            raise ValueError(f"Target column {target_column} not found")
+        # Validate periods
+        if train_start >= train_end:
+            raise ValueError(f"Invalid train period: {train_start} >= {train_end}")
+        if eval_start >= eval_end:
+            raise ValueError(f"Invalid eval period: {eval_start} >= {eval_end}")
         
-        target_returns = unified_data[target_column].values
-        
-        # Calculate number of sequences
-        num_sequences = len(unified_data) - self.config.WINDOW_SIZE
-        
-        if num_sequences <= 0:
-            raise ValueError(f"Insufficient data: need at least {self.config.WINDOW_SIZE + 1} records")
-        
-        if verbose:
-            print(f"   📐 Window size: {self.config.WINDOW_SIZE}")
-            print(f"   📊 Sequences to create: {num_sequences}")
-        
-        # Initialize arrays
-        num_features = unified_data.shape[1]
-        X = np.zeros((num_sequences, self.config.WINDOW_SIZE, num_features), dtype=np.float32)
-        y = np.zeros(num_sequences, dtype=np.float32)
-        timestamps = []
-        
-        # Create sequences
-        for i in range(num_sequences):
-            # Feature sequence (lookback window)
-            X[i] = feature_matrix[i:i + self.config.WINDOW_SIZE]
-            
-            # Target label (direction: 1 if positive return, 0 if negative)
-            future_return = target_returns[i + self.config.WINDOW_SIZE]
-            y[i] = 1.0 if future_return > 0 else 0.0
-            
-            # Store timestamp of prediction point
-            timestamps.append(unified_data.index[i + self.config.WINDOW_SIZE])
-        
-        timestamps = pd.DatetimeIndex(timestamps)
-        
-        if verbose:
-            print(f"   📊 Final shapes: X{X.shape}, y{y.shape}")
-            print(f"   📊 Class balance: {y.mean():.3f} (1=up, 0=down)")
-            print(f"   📅 Sequence period: {timestamps.min()} to {timestamps.max()}")
-        
-        return X, y, timestamps
-    
-    def split_temporal_data(self, X, y, timestamps, verbose=True):
-        """Split data temporally to prevent data leakage"""
-        if verbose:
-            print("📅 Splitting data temporally (NO DATA LEAKAGE)...")
-        
-        # Use config date ranges
-        train_start = pd.to_datetime(self.config.TRAIN_START)
-        train_end = pd.to_datetime(self.config.TRAIN_END)
-        val_start = pd.to_datetime(self.config.VAL_START)
-        val_end = pd.to_datetime(self.config.VAL_END)
-        test_start = pd.to_datetime(self.config.TEST_START)
-        test_end = pd.to_datetime(self.config.TEST_END)
+        print(f"      📅 Train: {train_start.date()} to {train_end.date()}")
+        print(f"      📅 {eval_set_name}: {eval_start.date()} to {eval_end.date()}")
         
         # Create masks
         train_mask = (timestamps >= train_start) & (timestamps <= train_end)
-        val_mask = (timestamps >= val_start) & (timestamps <= val_end)
-        test_mask = (timestamps >= test_start) & (timestamps <= test_end)
+        eval_mask = (timestamps >= eval_start) & (timestamps <= eval_end)
         
-        splits = {
-            'train': (X[train_mask], y[train_mask], timestamps[train_mask]),
-            'val': (X[val_mask], y[val_mask], timestamps[val_mask]),
-            'test': (X[test_mask], y[test_mask], timestamps[test_mask])
-        }
+        # Split data
+        train_set = (X[train_mask], y[train_mask])
+        eval_set = (X[eval_mask], y[eval_mask], timestamps[eval_mask])
         
-        if verbose:
-            for split_name, (X_split, y_split, ts_split) in splits.items():
-                print(f"   📊 {split_name.upper()}: {len(y_split)} samples, "
-                      f"balance: {y_split.mean():.3f}")
-                if len(ts_split) > 0:
-                    print(f"      📅 Period: {ts_split.min().date()} to {ts_split.max().date()}")
+        print(f"      ✅ Train set size: {len(train_set[0])}")
+        print(f"      ✅ {eval_set_name} set size: {len(eval_set[0])}")
         
-        return splits
+        # Additional validation
+        if len(train_set[0]) == 0:
+            raise ValueError("No training data available for the specified period")
+        if len(eval_set[0]) == 0:
+            raise ValueError(f"No {eval_set_name.lower()} data available for the specified period")
+        
+        return train_set, eval_set
+    
+    def print_data_summary(self, model_input_data, processed_data):
+        """Print summary of prepared data for debugging"""
+        print("🔍 Data Summary:")
+        print(f"   Model Input Shape: {model_input_data.shape}")
+        print(f"   Date Range: {model_input_data.index[0]} to {model_input_data.index[-1]}")
+        print(f"   Features: {list(model_input_data.columns)}")
+        
+        for pair in self.config.ALL_CURRENCY_PAIRS:
+            if pair in processed_data:
+                df = processed_data[pair]
+                print(f"   {pair}: {len(df)} records")
+        
+        return True

@@ -1,0 +1,6 @@
+﻿Strategy,Total_Return_%,Sharpe_Ratio,Win_Rate_%,Max_Drawdown_%,Total_Trades,Avg_Return_Per_Trade_%,Avg_Holding_Hours,Avg_Leverage
+Buy & Hold (USDJPY),0.09,0.0,100.0,0.0,1,0.11,1.0,1.0
+RSI Based (USDJPY),-0.87,-0.052,40.0,0.87,35,-0.0,1.94,1.0
+MACD Based (USDJPY),-2.84,-0.427,32.61,2.84,46,-0.04,2.02,1.0
+MULTI-CNN-LSTM-Moderate (USDJPY),-3.25,-0.538,9.09,3.25,66,-0.03,2.8,1.0
+Multi-CNN-LSTM-Moderate (USDJPY),-3.25,-0.538,9.09,3.25,66,-0.03,2.8,1.0

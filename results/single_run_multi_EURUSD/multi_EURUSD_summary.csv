@@ -1,0 +1,6 @@
+﻿Strategy,Total_Return_%,Sharpe_Ratio,Win_Rate_%,Max_Drawdown_%,Total_Trades,Avg_Return_Per_Trade_%,Avg_Holding_Hours,Avg_Leverage
+Buy & Hold (EURUSD),-0.12,0.0,0.0,0.12,1,-0.1,3.0,1.0
+MACD Based (EURUSD),-0.72,-0.0,55.56,0.81,36,-0.0,1.89,1.0
+RSI Based (EURUSD),-1.88,-0.422,31.58,1.88,38,-0.03,1.89,1.0
+MULTI-CNN-LSTM-Moderate (EURUSD),-3.12,-0.412,14.08,3.12,71,-0.02,2.65,1.0
+Multi-CNN-LSTM-Moderate (EURUSD),-3.12,-0.412,14.08,3.12,71,-0.02,2.65,1.0

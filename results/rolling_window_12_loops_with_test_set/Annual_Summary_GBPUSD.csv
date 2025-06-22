@@ -1,0 +1,6 @@
+﻿Metric,Multi-CNN-LSTM Conservative,Multi-CNN-LSTM Moderate,Multi-CNN-LSTM Aggressive,Single-CNN-LSTM,Buy & Hold,RSI Based,MACD Based
+Total Return (%),0,0,1.551,-4.116,-0.1,2.107,12.866
+Avg. Sharpe Ratio,0,0,0.401,-1.233,-0.12,1.587,1.613
+Avg. Win Rate (%),0,0,46.57,46.403,58.333,39.871,53.802
+Avg. Max Drawdown (%),0,0,0.983,1.297,3.12,2.004,2.551
+Avg. Total Trades,0,0,288.0,292.25,1.0,149.667,357.083

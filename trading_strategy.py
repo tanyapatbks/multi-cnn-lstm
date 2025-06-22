@@ -1,477 +1,328 @@
 """
-Trading Strategy for Multi-Currency CNN-LSTM Forex Prediction
-Enhanced with Proper Forex Position Sizing and Confidence-based Lot Sizing
-Fixed all DatetimeIndex issues and Sharpe Ratio calculation
+Trading Strategies - Complete Version with Multiple Thresholds and Realistic Trading Rules
+Fixed Maximum Drawdown calculation and enhanced performance metrics with holding period constraints
 """
-
 import numpy as np
 import pandas as pd
-from data_processor import DataProcessor
-
-# Helper functions to handle both Series and DatetimeIndex
-def get_timestamp_value(timestamps, index):
-    """Safely get timestamp value regardless of type"""
-    if hasattr(timestamps, 'iloc'):
-        return timestamps.iloc[index]
-    else:
-        return timestamps[index]
-
-def get_last_timestamp(timestamps):
-    """Safely get last timestamp regardless of type"""
-    if hasattr(timestamps, 'iloc'):
-        return timestamps.iloc[-1]
-    else:
-        return timestamps[-1]
 
 class ForexPortfolioManager:
-    """Portfolio Manager specifically for Forex trading"""
-
-    def __init__(self, config):
+    """Enhanced portfolio manager with detailed trade tracking, realistic constraints, and leverage support."""
+    def __init__(self, config, strategy_threshold=None):
         self.config = config
-        self.capital = config.INITIAL_CAPITAL
         self.initial_capital = config.INITIAL_CAPITAL
-        self.positions = []
+        self.capital = self.initial_capital
         self.trade_history = []
-        self.capital_history = [config.INITIAL_CAPITAL]
-        self.daily_returns = []  # For Sharpe ratio calculation
-        self.timestamps = []
-
-    def calculate_position_size(self, confidence_level='moderate', currency_pair='EURUSD'):
-        """
-        Calculate position size based on confidence level from config
-
-        Args:
-            confidence_level: 'conservative', 'moderate', or 'aggressive'
-            currency_pair: Currency pair being traded
-
-        Returns:
-            dict with lot_size, units, max_loss, pip_value
-        """
-        lot_size = self.config.LOT_SIZES.get(confidence_level, 1.0)
-        pip_value = self.config.PIP_VALUES.get(currency_pair, 10.0)
-        max_loss = lot_size * self.config.STOP_LOSS_PIPS * pip_value
-        max_allowed_loss = self.capital * self.config.RISK_PER_TRADE_PCT
-
-        if max_loss > max_allowed_loss:
-            adjusted_lot_size = max_allowed_loss / (self.config.STOP_LOSS_PIPS * pip_value)
-            lot_size = min(lot_size, adjusted_lot_size)
-            max_loss = lot_size * self.config.STOP_LOSS_PIPS * pip_value
-
-        units = lot_size * 100000
-        position_value = units * 1.0
-        required_margin = position_value / self.config.LEVERAGE
-
-        return {
-            'lot_size': round(lot_size, 2),
-            'units': int(units),
-            'pip_value': pip_value,
-            'max_loss': max_loss,
-            'required_margin': required_margin,
-            'confidence_level': confidence_level
+        self.capital_history = [self.initial_capital]
+        
+        # Leverage mapping based on strategy threshold
+        self.leverage_mapping = {
+            'Conservative': 2.0,  # High leverage for high confidence signals
+            'Moderate': 1.0,      # Standard leverage
+            'Aggressive': 0.5     # Low leverage for uncertain signals
         }
+        
+        # Set leverage based on strategy threshold
+        self.current_leverage = self.leverage_mapping.get(strategy_threshold, 1.0)
+        
+        # Base lot size (will be adjusted by leverage)
+        self.base_lot_size = 0.1
 
-    def execute_forex_trade(self, trade_type, entry_price, exit_price,
-                          timestamp, currency_pair='EURUSD',
-                          confidence_level='moderate'):
-        """Execute a forex trade with proper position sizing"""
-        position_info = self.calculate_position_size(confidence_level, currency_pair)
-
-        if currency_pair == 'USDJPY':
-            pip_multiplier = 100
-        else:
-            pip_multiplier = 10000
-
-        if trade_type == 'long':
-            pips_gained = (exit_price - entry_price) * pip_multiplier
-        else:  # short
-            pips_gained = (entry_price - exit_price) * pip_multiplier
-
-        pnl = pips_gained * position_info['pip_value'] * position_info['lot_size']
+    def execute_trade(self, trade_type, entry_price, exit_price, currency_pair, hold_hours=0, close_reason="signal"):
+        """Enhanced trade execution with detailed logging and leverage application."""
+        pip_value = self.config.PIP_VALUES.get(currency_pair, 10.0)
+        pip_multiplier = 100 if 'JPY' in currency_pair else 10000
+        pips_gained = (exit_price - entry_price) * pip_multiplier if trade_type == 'long' else (entry_price - exit_price) * pip_multiplier
+        
+        # Apply leverage to lot size
+        effective_lot_size = self.base_lot_size * self.current_leverage
+        pnl = pips_gained * pip_value * effective_lot_size
+        
         self.capital += pnl
         self.capital_history.append(self.capital)
-
-        trade_record = {
-            'type': trade_type,
-            'currency_pair': currency_pair,
+        
+        # Detailed trade record including leverage info
+        self.trade_history.append({
+            'pnl': pnl,
+            'trade_type': trade_type,
             'entry_price': entry_price,
             'exit_price': exit_price,
-            'lot_size': position_info['lot_size'],
-            'confidence_level': confidence_level,
-            'units': position_info['units'],
-            'pips_gained': round(pips_gained, 1),
-            'pnl': pnl,
-            'pnl_pct': (pnl / self.initial_capital) * 100,
-            'capital_after': self.capital,
-            'timestamp': timestamp
-        }
-        self.trade_history.append(trade_record)
-        return trade_record
+            'pips': pips_gained,
+            'hold_hours': hold_hours,
+            'close_reason': close_reason,
+            'leverage_used': self.current_leverage,
+            'effective_lot_size': effective_lot_size
+        })
 
-    def calculate_sharpe_ratio(self):
-        """Calculate Sharpe ratio from capital history"""
-        if len(self.capital_history) < 2:
-            return 0.0
-
-        capital_array = np.array(self.capital_history)
-        returns = np.diff(capital_array) / capital_array[:-1]
-
-        if len(returns) == 0 or np.std(returns) == 0:
-            return 0.0
-
-        sharpe_ratio = np.mean(returns) / np.std(returns) * np.sqrt(252 * 24)
-        return sharpe_ratio
+    def update_capital_for_buy_and_hold(self, current_price, initial_price, currency_pair):
+        """Special method for Buy & Hold strategy to track continuous performance with leverage."""
+        pip_value = self.config.PIP_VALUES.get(currency_pair, 10.0)
+        pip_multiplier = 100 if 'JPY' in currency_pair else 10000
+        effective_lot_size = self.base_lot_size * self.current_leverage
+        
+        # Calculate unrealized P&L with leverage
+        pips_gained = (current_price - initial_price) * pip_multiplier
+        unrealized_pnl = pips_gained * pip_value * effective_lot_size
+        current_capital = self.initial_capital + unrealized_pnl
+        
+        self.capital_history.append(current_capital)
 
     def get_performance_metrics(self):
-        """Calculate portfolio performance metrics"""
-        if not self.trade_history:
+        """Enhanced performance calculation including proper Maximum Drawdown and trading statistics."""
+        if not self.capital_history or len(self.capital_history) < 2:
             return {
-                'total_return': 0, 'total_return_pct': 0, 'final_capital': self.initial_capital,
-                'total_trades': 0, 'winning_trades': 0, 'losing_trades': 0, 'win_rate': 0,
-                'avg_win_pips': 0, 'avg_loss_pips': 0, 'profit_factor': 0,
-                'max_capital': self.initial_capital, 'min_capital': self.initial_capital,
-                'max_drawdown': 0, 'max_drawdown_pct': 0, 'total_pips': 0, 'sharpe_ratio': 0
+                'total_return_pct': 0, 'sharpe_ratio': 0, 'win_rate': 0, 
+                'total_trades': 0, 'max_drawdown_pct': 0,
+                'avg_hold_hours': 0, 'stop_loss_rate': 0, 'take_profit_rate': 0
             }
-
-        total_return = self.capital - self.initial_capital
-        total_return_pct = (total_return / self.initial_capital) * 100
-        pnls = [t['pnl'] for t in self.trade_history]
-        pips = [t['pips_gained'] for t in self.trade_history]
-        winning_trades = [t for t in self.trade_history if t['pnl'] > 0]
-        losing_trades = [t for t in self.trade_history if t['pnl'] <= 0]
-        winning_pips = [t['pips_gained'] for t in winning_trades]
-        losing_pips = [t['pips_gained'] for t in losing_trades]
-
-        capital_array = np.array(self.capital_history)
-        running_max = np.maximum.accumulate(capital_array)
-        drawdowns = running_max - capital_array
-        max_drawdown = np.max(drawdowns)
-        max_drawdown_pct = (max_drawdown / running_max[np.argmax(drawdowns)]) * 100 if len(drawdowns) > 0 else 0
-
-        gross_profit = sum([p for p in pnls if p > 0])
-        gross_loss = abs(sum([p for p in pnls if p <= 0]))
-        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
-        sharpe_ratio = self.calculate_sharpe_ratio()
-
+        
+        # Calculate total return
+        total_return_pct = ((self.capital_history[-1] - self.initial_capital) / self.initial_capital) * 100
+        
+        # Calculate returns series for Sharpe ratio
+        capital_series = pd.Series(self.capital_history)
+        returns = capital_series.pct_change().dropna()
+        
+        # Enhanced Sharpe calculation
+        if len(returns) > 1 and returns.std() > 0:
+            sharpe = (returns.mean() / returns.std()) * np.sqrt(252 * 24)  # Annualized
+        else:
+            # For Buy & Hold or strategies with minimal variance, use simpler calculation
+            if len(self.capital_history) >= 2:
+                total_period_return = (self.capital_history[-1] - self.capital_history[0]) / self.capital_history[0]
+                # Assume monthly evaluation period for annualization
+                periods_per_year = 12
+                annualized_return = total_period_return * periods_per_year
+                # Use a conservative estimate for volatility if we can't calculate it
+                estimated_volatility = abs(total_period_return) * 2  # Conservative estimate
+                sharpe = annualized_return / estimated_volatility if estimated_volatility > 0 else 0
+            else:
+                sharpe = 0
+        
+        # Win rate calculation
+        if self.trade_history:
+            win_rate = sum(1 for t in self.trade_history if t['pnl'] > 0) / len(self.trade_history)
+        else:
+            # For Buy & Hold, win rate is 1 if profitable, 0 if not
+            win_rate = 1.0 if total_return_pct > 0 else 0.0
+        
+        # Fixed Maximum Drawdown calculation
+        peak = capital_series.expanding().max()
+        drawdown = (capital_series - peak) / peak * 100
+        max_drawdown_pct = abs(drawdown.min()) if len(drawdown) > 0 and not drawdown.isna().all() else 0
+        
+        # Enhanced trading statistics including leverage info
+        if self.trade_history:
+            avg_hold_hours = np.mean([t.get('hold_hours', 0) for t in self.trade_history])
+            stop_loss_rate = sum(1 for t in self.trade_history if t.get('close_reason') == 'stop_loss') / len(self.trade_history)
+            take_profit_rate = sum(1 for t in self.trade_history if t.get('close_reason') == 'take_profit') / len(self.trade_history)
+            avg_leverage = np.mean([t.get('leverage_used', 1.0) for t in self.trade_history])
+        else:
+            avg_hold_hours = 0
+            stop_loss_rate = 0
+            take_profit_rate = 0
+            avg_leverage = self.current_leverage
+        
         return {
-            'total_return': total_return, 'total_return_pct': total_return_pct, 'final_capital': self.capital,
-            'total_trades': len(self.trade_history), 'winning_trades': len(winning_trades),
-            'losing_trades': len(losing_trades), 'win_rate': len(winning_trades) / len(self.trade_history) if self.trade_history else 0,
-            'avg_win_pips': np.mean(winning_pips) if winning_pips else 0, 'avg_loss_pips': np.mean(losing_pips) if losing_pips else 0,
-            'profit_factor': profit_factor, 'max_capital': np.max(capital_array), 'min_capital': np.min(capital_array),
-            'max_drawdown': max_drawdown, 'max_drawdown_pct': max_drawdown_pct, 'total_pips': sum(pips),
-            'sharpe_ratio': sharpe_ratio
+            'total_return_pct': total_return_pct, 
+            'sharpe_ratio': sharpe, 
+            'win_rate': win_rate, 
+            'total_trades': len(self.trade_history),
+            'max_drawdown_pct': max_drawdown_pct,
+            'avg_hold_hours': avg_hold_hours,
+            'stop_loss_rate': stop_loss_rate,
+            'take_profit_rate': take_profit_rate,
+            'avg_leverage': avg_leverage
         }
 
-class FixedHoldingTradingStrategy:
-    """Fixed Holding Period Trading Strategy with Forex Position Management"""
-    def __init__(self, config):
+class TradingSimulator:
+    """Enhanced simulator with realistic trading constraints, proper Buy & Hold handling, and leverage support."""
+    def __init__(self, config, prices, timestamps=None, strategy_threshold=None):
         self.config = config
+        self.prices = prices.values if isinstance(prices, pd.Series) else prices
+        self.timestamps = timestamps if timestamps is not None else range(len(self.prices))
+        self.strategy_threshold = strategy_threshold
+        self.portfolio = ForexPortfolioManager(config, strategy_threshold)
+        
+        # Trading constraints (configurable via config or use defaults)
+        self.MIN_HOLD_HOURS = getattr(config, 'MIN_HOLD_HOURS', 1)
+        self.MAX_HOLD_HOURS = getattr(config, 'MAX_HOLD_HOURS', 3)
+        self.STOP_LOSS_PCT = getattr(config, 'STOP_LOSS_PCT', 2.0)  # 2%
+        self.TAKE_PROFIT_AFTER_HOURS = getattr(config, 'TAKE_PROFIT_AFTER_HOURS', 1)
 
-    def apply_strategy(self, predictions, prices, timestamps, threshold_type='moderate',
-                      portfolio_manager=None, currency_pair='EURUSD', verbose=True):
-        if verbose:
-            print(f"📈 Applying {threshold_type} trading strategy for {currency_pair}...")
-            print(f"   Lot size: {self.config.LOT_SIZES[threshold_type]} lots")
-
-        if portfolio_manager is None:
-            portfolio_manager = ForexPortfolioManager(self.config)
-
-        thresholds = self.config.THRESHOLDS[threshold_type]
-        trades, positions, signals = [], np.zeros(len(predictions)), np.zeros(len(predictions))
-        current_position, entry_time, entry_price = 0, None, None
-
-        for i, (pred, price, timestamp) in enumerate(zip(predictions, prices, timestamps)):
-            if current_position != 0:
-                hours_held = (timestamp - entry_time).total_seconds() / 3600
-                pip_multiplier = 100 if currency_pair == 'USDJPY' else 10000
-                current_pips = (price - entry_price) * pip_multiplier if current_position == 1 else (entry_price - price) * pip_multiplier
-
-                should_close, close_reason = False, ''
-                if current_pips <= -self.config.STOP_LOSS_PIPS:
-                    should_close, close_reason = True, 'stop_loss'
-                elif current_pips >= self.config.TAKE_PROFIT_PIPS:
-                    should_close, close_reason = True, 'take_profit'
-                elif hours_held >= self.config.MIN_HOLDING_HOURS:
-                    if hours_held >= self.config.MAX_HOLDING_HOURS:
-                        should_close, close_reason = True, 'time_limit'
-                    elif current_pips > 0:
-                        should_close, close_reason = True, 'profit_taking'
-
-                if should_close:
-                    trade_record = portfolio_manager.execute_forex_trade(
-                        'long' if current_position == 1 else 'short', entry_price, price, timestamp,
-                        currency_pair, threshold_type)
-                    trades.append({
-                        'type': 'long' if current_position == 1 else 'short', 'entry_time': entry_time,
-                        'exit_time': timestamp, 'entry_price': entry_price, 'exit_price': price,
-                        'pips_gained': trade_record['pips_gained'], 'lot_size': trade_record['lot_size'],
-                        'pnl': trade_record['pnl'], 'pnl_pct': trade_record['pnl_pct'],
-                        'holding_hours': hours_held, 'reason': close_reason, 'confidence_level': threshold_type
-                    })
-                    current_position, entry_time, entry_price = 0, None, None
-                positions[i] = current_position
-                continue
-
-            if current_position == 0:
-                if pred >= thresholds['buy']:
-                    signals[i], current_position, entry_price, entry_time = 1, 1, price, timestamp
-                elif pred <= thresholds['sell']:
-                    signals[i], current_position, entry_price, entry_time = -1, -1, price, timestamp
-            positions[i] = current_position
-
-        if current_position != 0:
-            final_timestamp, final_price = get_last_timestamp(timestamps), prices.iloc[-1]
-            trade_record = portfolio_manager.execute_forex_trade(
-                'long' if current_position == 1 else 'short', entry_price, final_price,
-                final_timestamp, currency_pair, threshold_type)
-            trades.append({
-                'type': 'long' if current_position == 1 else 'short', 'entry_time': entry_time,
-                'exit_time': final_timestamp, 'entry_price': entry_price, 'exit_price': final_price,
-                'pips_gained': trade_record['pips_gained'], 'lot_size': trade_record['lot_size'],
-                'pnl': trade_record['pnl'], 'pnl_pct': trade_record['pnl_pct'],
-                'holding_hours': (final_timestamp - entry_time).total_seconds() / 3600,
-                'reason': 'end_of_data', 'confidence_level': threshold_type
+    def run(self, signals):
+        """Enhanced simulation with realistic trading rules and proper Buy & Hold handling."""
+        # Check if this is a Buy & Hold strategy
+        if self._is_buy_and_hold_strategy(signals):
+            return self._run_buy_and_hold(signals)
+        else:
+            return self._run_realistic_strategy(signals)
+    
+    def _is_buy_and_hold_strategy(self, signals):
+        """Detect if this is a Buy & Hold strategy."""
+        # Buy & Hold typically has signal=1 at start and 0 elsewhere
+        non_zero_signals = np.count_nonzero(signals)
+        return non_zero_signals <= 2 and len(signals) > 0 and signals[0] == 1
+    
+    def _run_buy_and_hold(self, signals):
+        """Special handling for Buy & Hold strategy with continuous performance tracking."""
+        if len(self.prices) == 0:
+            return self.portfolio.get_performance_metrics()
+        
+        initial_price = self.prices[0]
+        
+        # Track performance continuously throughout the period
+        for i, current_price in enumerate(self.prices):
+            if i > 0:  # Skip first price as it's the entry point
+                self.portfolio.update_capital_for_buy_and_hold(
+                    current_price, initial_price, self.config.TARGET_PAIR
+                )
+        
+        # Create a single trade record for bookkeeping with leverage
+        if len(self.prices) > 1:
+            final_price = self.prices[-1]
+            pip_value = self.config.PIP_VALUES.get(self.config.TARGET_PAIR, 10.0)
+            pip_multiplier = 100 if 'JPY' in self.config.TARGET_PAIR else 10000
+            effective_lot_size = self.portfolio.base_lot_size * self.portfolio.current_leverage
+            
+            pips_gained = (final_price - initial_price) * pip_multiplier
+            pnl = pips_gained * pip_value * effective_lot_size
+            self.portfolio.trade_history.append({
+                'pnl': pnl,
+                'trade_type': 'long',
+                'entry_price': initial_price,
+                'exit_price': final_price,
+                'pips': pips_gained,
+                'hold_hours': len(self.prices) - 1,
+                'close_reason': 'strategy_end',
+                'leverage_used': self.portfolio.current_leverage,
+                'effective_lot_size': effective_lot_size
             })
+        
+        return self.portfolio.get_performance_metrics()
+    
+    def _run_realistic_strategy(self, signals):
+        """Realistic strategy simulation with proper holding period constraints."""
+        position = 0
+        entry_price = 0
+        entry_time = 0
+        
+        for i in range(len(self.prices)):
+            current_price = self.prices[i]
+            
+            # Check if we have an open position
+            if position != 0:
+                hold_hours = i - entry_time
+                
+                # Calculate current P&L percentage
+                if position == 1:  # Long position
+                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                else:  # Short position
+                    pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                
+                # Check exit conditions (in order of priority)
+                should_exit = False
+                exit_reason = ""
+                
+                # 1. Stop Loss (immediate, highest priority)
+                if pnl_pct <= -self.STOP_LOSS_PCT:
+                    should_exit = True
+                    exit_reason = "stop_loss"
+                
+                # 2. Take Profit after minimum hold period
+                elif hold_hours >= self.TAKE_PROFIT_AFTER_HOURS and pnl_pct > 0:
+                    should_exit = True
+                    exit_reason = "take_profit"
+                
+                # 3. Maximum hold period reached
+                elif hold_hours >= self.MAX_HOLD_HOURS:
+                    should_exit = True
+                    exit_reason = "max_hold"
+                
+                # 4. Signal change (only after minimum hold period)
+                elif hold_hours >= self.MIN_HOLD_HOURS and signals[i] != position:
+                    should_exit = True
+                    exit_reason = "signal"
+                
+                # Execute exit if conditions met
+                if should_exit:
+                    self.portfolio.execute_trade(
+                        'long' if position == 1 else 'short',
+                        entry_price,
+                        current_price,
+                        self.config.TARGET_PAIR,
+                        hold_hours=hold_hours,
+                        close_reason=exit_reason
+                    )
+                    position = 0
+            
+            # Check for new position entry (only if no current position)
+            if position == 0 and signals[i] != 0:
+                position = signals[i]
+                entry_price = current_price
+                entry_time = i
+        
+        # Close any remaining position at the end
+        if position != 0:
+            hold_hours = len(self.prices) - 1 - entry_time
+            self.portfolio.execute_trade(
+                'long' if position == 1 else 'short',
+                entry_price,
+                self.prices[-1],
+                self.config.TARGET_PAIR,
+                hold_hours=hold_hours,
+                close_reason="strategy_end"
+            )
+        
+        return self.portfolio.get_performance_metrics()
 
-        portfolio_metrics = portfolio_manager.get_performance_metrics()
-        if verbose:
-            print(f"   ✅ Strategy completed:\n      Total trades: {len(trades)}\n      Total pips: {portfolio_metrics['total_pips']:.1f}\n      Final capital: ${portfolio_metrics['final_capital']:,.2f}\n      Total return: {portfolio_metrics['total_return_pct']:.2f}%\n      Win rate: {portfolio_metrics['win_rate']:.4f}\n      Sharpe ratio: {portfolio_metrics['sharpe_ratio']:.2f}\n      Max drawdown: {portfolio_metrics['max_drawdown_pct']:.2f}%")
+# --- Enhanced Signal Generation Functions ---
 
-        buy_signals = np.sum(predictions >= thresholds['buy'])
-        sell_signals = np.sum(predictions <= thresholds['sell'])
-        hold_signals = len(predictions) - buy_signals - sell_signals
+def get_cnn_lstm_signals_multiple_thresholds(config, predictions):
+    """Generates signals from model predictions for all thresholds with correct buy/sell zones."""
+    results = {}
+    
+    for threshold_name, thresholds in config.THRESHOLDS.items():
+        signals = np.zeros_like(predictions)
+        buy_threshold = thresholds['buy']
+        sell_threshold = thresholds['sell']
+        
+        # Correct signal generation
+        signals[predictions >= buy_threshold] = 1   # Buy signal
+        signals[predictions <= sell_threshold] = -1  # Sell signal
+        # Values between sell_threshold and buy_threshold remain 0 (Hold)
+        
+        results[threshold_name] = signals
+    
+    return results
 
-        return {
-            'trades': trades, 'signals': signals, 'positions': positions, 'performance': portfolio_metrics,
-            'threshold_type': threshold_type, 'thresholds': thresholds, 'lot_size': self.config.LOT_SIZES[threshold_type],
-            'portfolio_manager': portfolio_manager, 'capital_history': portfolio_manager.capital_history,
-            'zone_stats': {
-                'buy_signals': buy_signals, 'sell_signals': sell_signals, 'hold_signals': hold_signals,
-                'buy_pct': buy_signals / len(predictions) * 100, 'sell_pct': sell_signals / len(predictions) * 100,
-                'hold_pct': hold_signals / len(predictions) * 100
-            }
-        }
+def get_cnn_lstm_signals(config, predictions):
+    """Generates signals from model predictions using Aggressive threshold for backward compatibility."""
+    signals = np.zeros_like(predictions)
+    thresholds = config.THRESHOLDS['Aggressive']
+    buy_threshold = thresholds['buy']
+    sell_threshold = thresholds['sell']
+    
+    signals[predictions >= buy_threshold] = 1
+    signals[predictions <= sell_threshold] = -1
+    return signals
 
-    def compare_strategies(self, predictions, prices, timestamps, currency_pair='EURUSD', verbose=True):
-        if verbose:
-            print(f"\n📊 Comparing all trading strategies for {currency_pair}...")
-        results = {}
-        for strategy_type in ['conservative', 'moderate', 'aggressive']:
-            portfolio_manager = ForexPortfolioManager(self.config)
-            result = self.apply_strategy(
-                predictions, prices, timestamps, strategy_type, portfolio_manager, currency_pair, verbose=False)
-            results[f'{strategy_type.title()}'] = result
+def get_rsi_signals(config, rsi_series):
+    """Generates signals from an RSI series."""
+    signals = np.zeros_like(rsi_series)
+    signals[rsi_series <= config.RSI_OVERSOLD] = 1
+    signals[rsi_series >= config.RSI_OVERBOUGHT] = -1
+    return signals
 
-        if verbose:
-            print("\n📊 Strategy Comparison Summary:\n" + "-" * 120)
-            print(f"{'Strategy':<15} {'Lot Size':<10} {'Trades':<8} {'Pips':<10} {'Return%':<10} {'Win Rate':<10} {'Sharpe':<10} {'Max DD%':<10}")
-            print("-" * 120)
-            for name, result in results.items():
-                perf = result['performance']
-                print(f"{name:<15} {result['lot_size']:<10.1f} {perf['total_trades']:<8} "
-                      f"{perf['total_pips']:<10.1f} {perf['total_return_pct']:<10.2f} "
-                      f"{perf['win_rate']:<10.4f} {perf['sharpe_ratio']:<10.2f} "
-                      f"{perf['max_drawdown_pct']:<10.2f}")
-            print("\n📊 Zone Statistics (% of signals):\n" + "-" * 80)
-            print(f"{'Strategy':<15} {'Buy Zone':<15} {'Hold Zone':<15} {'Sell Zone':<15}")
-            print("-" * 80)
-            for name, result in results.items():
-                stats = result['zone_stats']
-                print(f"{name:<15} {stats['buy_pct']:<15.1f} {stats['hold_pct']:<15.1f} {stats['sell_pct']:<15.1f}")
-        return results
+def get_macd_signals(config, macd_series, signal_series):
+    """Generates signals from MACD crossover."""
+    signals = np.zeros_like(macd_series)
+    signals[macd_series > signal_series] = 1
+    signals[macd_series < signal_series] = -1
+    return signals
 
-    def apply_multi_model_to_all_pairs(self, model_builder, processed_data, data_splits,
-                                      eval_set='test', verbose=True):
-        if verbose:
-            print("\n🌍 Applying Multi-Currency Model to Each Currency Pair\n" + "="*70)
-        all_pairs_results = {}
-        for currency_pair in self.config.CURRENCY_PAIRS:
-            if verbose:
-                print(f"\n💱 Trading {currency_pair} with Multi-Model:")
-            X_eval, _, eval_timestamps = data_splits[eval_set]
-            predictions = model_builder.predict(X_eval)
-            processor = DataProcessor(self.config)
-            eval_price_data = processor.get_price_data(processed_data, eval_timestamps, currency_pair)
-            eval_prices = eval_price_data['Close_Price']
-            pair_results = self.compare_strategies(
-                predictions, eval_prices, eval_timestamps, currency_pair, verbose=verbose)
-            all_pairs_results[currency_pair] = pair_results
-        return all_pairs_results
-
-class TechnicalIndicatorStrategies:
-    """Trading strategies based on technical indicators"""
-    def __init__(self, config):
-        self.config = config
-
-    def rsi_strategy(self, prices, timestamps, technical_indicators,
-                    currency_pair='EURUSD', portfolio_manager=None, verbose=True):
-        if verbose:
-            print(f"📊 Applying RSI-based trading strategy for {currency_pair}...")
-        if portfolio_manager is None:
-            portfolio_manager = ForexPortfolioManager(self.config)
-
-        rsi_values = technical_indicators['RSI']
-        trades, positions = [], np.zeros(len(prices))
-        current_position, entry_price, entry_time = 0, None, None
-        confidence_level = 'moderate'
-
-        for i, (price, timestamp, rsi) in enumerate(zip(prices, timestamps, rsi_values)):
-            if (current_position == 1 and rsi >= self.config.RSI_OVERBOUGHT) or \
-               (current_position == -1 and rsi <= self.config.RSI_OVERSOLD):
-                reason = 'rsi_overbought' if current_position == 1 else 'rsi_oversold'
-                trade_record = portfolio_manager.execute_forex_trade(
-                    'long' if current_position == 1 else 'short', entry_price, price, timestamp,
-                    currency_pair, confidence_level)
-                trades.append({
-                    'type': 'long' if current_position == 1 else 'short', 'entry_time': entry_time,
-                    'exit_time': timestamp, 'entry_price': entry_price, 'exit_price': price,
-                    'pips_gained': trade_record['pips_gained'], 'pnl': trade_record['pnl'],
-                    'pnl_pct': trade_record['pnl_pct'], 'reason': reason
-                })
-                current_position = 0
-
-            if current_position == 0:
-                if rsi <= self.config.RSI_OVERSOLD:
-                    current_position, entry_price, entry_time = 1, price, timestamp
-                elif rsi >= self.config.RSI_OVERBOUGHT:
-                    current_position, entry_price, entry_time = -1, price, timestamp
-            positions[i] = current_position
-
-        if current_position != 0:
-            final_timestamp, final_price = get_last_timestamp(timestamps), prices.iloc[-1]
-            trade_record = portfolio_manager.execute_forex_trade(
-                'long' if current_position == 1 else 'short', entry_price, final_price,
-                final_timestamp, currency_pair, confidence_level)
-            trades.append({
-                'type': 'long' if current_position == 1 else 'short', 'entry_time': entry_time,
-                'exit_time': final_timestamp, 'entry_price': entry_price, 'exit_price': final_price,
-                'pips_gained': trade_record['pips_gained'], 'pnl': trade_record['pnl'],
-                'pnl_pct': trade_record['pnl_pct'], 'reason': 'end_of_data'
-            })
-
-        portfolio_metrics = portfolio_manager.get_performance_metrics()
-        if verbose:
-            print(f"   ✅ RSI Strategy completed:")
-            print(f"      Total trades: {len(trades)}\n      Total pips: {portfolio_metrics['total_pips']:.1f}\n      Final capital: ${portfolio_metrics['final_capital']:,.2f}\n      Total return: {portfolio_metrics['total_return_pct']:.2f}%\n      Win rate: {portfolio_metrics['win_rate']:.4f}\n      Sharpe ratio: {portfolio_metrics['sharpe_ratio']:.2f}")
-
-        return {
-            'strategy_name': 'RSI-based Trading', 'trades': trades, 'positions': positions,
-            'performance': portfolio_metrics, 'portfolio_manager': portfolio_manager,
-            'lot_size': self.config.LOT_SIZES[confidence_level]
-        }
-
-    def macd_strategy(self, prices, timestamps, technical_indicators,
-                     currency_pair='EURUSD', portfolio_manager=None, verbose=True):
-        if verbose:
-            print(f"📊 Applying MACD-based trading strategy for {currency_pair}...")
-        if portfolio_manager is None:
-            portfolio_manager = ForexPortfolioManager(self.config)
-
-        macd, macd_signal = technical_indicators['MACD'], technical_indicators['MACD_Signal']
-        trades, positions = [], np.zeros(len(prices))
-        current_position, entry_price, entry_time = 0, None, None
-        confidence_level = 'moderate'
-        start_idx = max(self.config.MACD_SLOW, 50)
-
-        for i in range(start_idx, len(prices)):
-            price, timestamp = prices.iloc[i], get_timestamp_value(timestamps, i)
-            if i > 0:
-                prev_macd, curr_macd = macd.iloc[i-1], macd.iloc[i]
-                prev_signal, curr_signal = macd_signal.iloc[i-1], macd_signal.iloc[i]
-                bullish_cross = prev_macd <= prev_signal and curr_macd > curr_signal
-                bearish_cross = prev_macd >= prev_signal and curr_macd < curr_signal
-
-                if (current_position == 1 and bearish_cross) or (current_position == -1 and bullish_cross):
-                    reason = 'macd_bearish_cross' if current_position == 1 else 'macd_bullish_cross'
-                    trade_record = portfolio_manager.execute_forex_trade(
-                        'long' if current_position == 1 else 'short', entry_price, price, timestamp,
-                        currency_pair, confidence_level)
-                    trades.append({
-                        'type': 'long' if current_position == 1 else 'short', 'entry_time': entry_time,
-                        'exit_time': timestamp, 'entry_price': entry_price, 'exit_price': price,
-                        'pips_gained': trade_record['pips_gained'], 'pnl': trade_record['pnl'],
-                        'pnl_pct': trade_record['pnl_pct'], 'reason': reason
-                    })
-                    current_position = 0
-
-                if current_position == 0:
-                    if bullish_cross:
-                        current_position, entry_price, entry_time = 1, price, timestamp
-                    elif bearish_cross:
-                        current_position, entry_price, entry_time = -1, price, timestamp
-            positions[i] = current_position
-
-        if current_position != 0:
-            final_timestamp, final_price = get_last_timestamp(timestamps), prices.iloc[-1]
-            trade_record = portfolio_manager.execute_forex_trade(
-                'long' if current_position == 1 else 'short', entry_price, final_price,
-                final_timestamp, currency_pair, confidence_level)
-            trades.append({
-                'type': 'long' if current_position == 1 else 'short', 'entry_time': entry_time,
-                'exit_time': final_timestamp, 'entry_price': entry_price, 'exit_price': final_price,
-                'pips_gained': trade_record['pips_gained'], 'pnl': trade_record['pnl'],
-                'pnl_pct': trade_record['pnl_pct'], 'reason': 'end_of_data'
-            })
-
-        portfolio_metrics = portfolio_manager.get_performance_metrics()
-        if verbose:
-            print(f"   ✅ MACD Strategy completed:")
-            print(f"      Total trades: {len(trades)}\n      Total pips: {portfolio_metrics['total_pips']:.1f}\n      Final capital: ${portfolio_metrics['final_capital']:,.2f}\n      Total return: {portfolio_metrics['total_return_pct']:.2f}%\n      Win rate: {portfolio_metrics['win_rate']:.4f}\n      Sharpe ratio: {portfolio_metrics['sharpe_ratio']:.2f}")
-
-        return {
-            'strategy_name': 'MACD-based Trading', 'trades': trades, 'positions': positions,
-            'performance': portfolio_metrics, 'portfolio_manager': portfolio_manager,
-            'lot_size': self.config.LOT_SIZES[confidence_level]
-        }
-
-class SimpleBaselineStrategies:
-    """Simple baseline strategies for comparison"""
-    def __init__(self, config):
-        self.config = config
-
-    def buy_and_hold(self, prices, timestamps, currency_pair='EURUSD', portfolio_manager=None):
-        """Simple buy and hold strategy with forex position sizing"""
-        if portfolio_manager is None:
-            portfolio_manager = ForexPortfolioManager(self.config)
-
-        entry_price, exit_price = prices.iloc[0], prices.iloc[-1]
-        exit_timestamp = get_last_timestamp(timestamps)
-        confidence_level = 'conservative'
-
-        portfolio_manager.execute_forex_trade(
-            'long', entry_price, exit_price, exit_timestamp, currency_pair, confidence_level)
-
-        return {
-            'strategy_name': 'Buy and Hold',
-            'performance': portfolio_manager.get_performance_metrics(),
-            'portfolio_manager': portfolio_manager,
-            'lot_size': self.config.LOT_SIZES[confidence_level]
-        }
-
-    def random_strategy(self, prices, timestamps, currency_pair='EURUSD',
-                       num_trades=50, seed=42):
-        """Random trading strategy for benchmark"""
-        np.random.seed(seed)
-        portfolio_manager = ForexPortfolioManager(self.config)
-        confidence_level = 'moderate'
-        n_prices = len(prices)
-        trades = []
-
-        for _ in range(num_trades):
-            if n_prices < 10: break
-            entry_idx = np.random.randint(0, n_prices - 5)
-            exit_idx = np.random.randint(entry_idx + 1, min(entry_idx + 24, n_prices))
-            entry_price, exit_price = prices.iloc[entry_idx], prices.iloc[exit_idx]
-            exit_time = get_timestamp_value(timestamps, exit_idx)
-            position = np.random.choice(['long', 'short'])
-
-            trade_record = portfolio_manager.execute_forex_trade(
-                position, entry_price, exit_price, exit_time, currency_pair, confidence_level)
-            trades.append(trade_record)
-
-        return {
-            'strategy_name': 'Random',
-            'performance': portfolio_manager.get_performance_metrics(),
-            'portfolio_manager': portfolio_manager,
-            'lot_size': self.config.LOT_SIZES[confidence_level]
-        }
+def get_buy_and_hold_signals(prices):
+    """Enhanced Buy & Hold signal generation."""
+    signals = np.zeros_like(prices)
+    if len(signals) > 0:
+        signals[0] = 1  # Buy at the start and hold
+    return signals

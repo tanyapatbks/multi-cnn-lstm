@@ -1,0 +1,8 @@
+﻿กลยุทธ์ (Strategy),คู่เงิน (Pair),Avg. Total Return (%),Avg. Sharpe Ratio,Avg. Win Rate (%),Avg. Max Drawdown (%),Avg. Total Trades
+Multi-CNN-LSTM Conservative,All,0.06,0.79,29.12,0.72,114.67
+Multi-CNN-LSTM Moderate,All,0.28,1.15,42.39,1.28,221.47
+Multi-CNN-LSTM Aggressive,All,0.07,0.37,46.78,1.73,299.39
+Single-CNN-LSTM,All,-0.12,-0.68,37.76,1.46,207.5
+RSI Based,All,-0.27,-1.53,38.58,1.46,148.53
+MACD Based,All,0.46,0.89,52.97,2.08,355.22
+Buy & Hold,All,0.1,0.2,52.78,2.29,1.0
