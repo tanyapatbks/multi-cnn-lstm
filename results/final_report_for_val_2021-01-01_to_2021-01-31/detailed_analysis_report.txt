@@ -1,40 +1,23 @@
-================================================================================
-FOREX CNN-LSTM PERFORMANCE ANALYSIS REPORT
-================================================================================
+COMPREHENSIVE PERFORMANCE ANALYSIS REPORT
+============================================================
+Generated on: 2025-06-22 15:59:26
+Total Strategies Analyzed: 27
 
-📊 OVERALL STATISTICS:
-Total Strategies Evaluated: 27
-Currencies: EURUSD, GBPUSD, USDJPY
-Model Families: Multi-CNN-LSTM, Single-CNN-LSTM, Baseline
+OVERALL PERFORMANCE STATISTICS:
+----------------------------------------
+Average Return: 0.07%
+Best Performer: MACD-based Trading (GBPUSD) (2.57%)
+Worst Performer: MACD-based Trading (EURUSD) (-1.90%)
 
-🏆 TOP 5 PERFORMERS (by Total Return):
-  5. Multi-CNN-LSTM-Moderate (GBPUSD) - 2.61%
-  24. MACD-based (GBPUSD) - 2.57%
-  6. Multi-CNN-LSTM-Aggressive (GBPUSD) - 2.17%
-  11. Single-CNN-LSTM-Moderate (EURUSD) - 2.02%
-  27. MACD-based (USDJPY) - 1.49%
+PERFORMANCE BY STRATEGY FAMILY:
+----------------------------------------
+Buy & Hold: Avg=0.23%, Std=1.01%, Count=3.0
+CNN-LSTM: Avg=-0.03%, Std=0.68%, Count=18.0
+MACD: Avg=0.72%, Std=2.34%, Count=3.0
+RSI: Avg=-0.11%, Std=0.88%, Count=3.0
 
-🎯 THRESHOLD EFFECTIVENESS ANALYSIS:
-  Conservative:
-    Average Return: 0.13%
-    Average Sharpe: -0.74
-    Success Rate: 66.7%
-    Consistency (σ): 0.92
-  Moderate:
-    Average Return: 0.54%
-    Average Sharpe: 0.74
-    Success Rate: 50.0%
-    Consistency (σ): 1.47
-  Aggressive:
-    Average Return: 0.47%
-    Average Sharpe: 1.56
-    Success Rate: 50.0%
-    Consistency (σ): 1.29
-
-🔄 MULTI vs SINGLE CURRENCY COMPARISON:
-  Multi-Currency Average Return: 0.55%
-  Single-Currency Average Return: 0.21%
-  Advantage to Multi-Currency: 0.34%
-
-⚠️ RISK ANALYSIS:
-================================================================================
+CNN-LSTM THRESHOLD ANALYSIS:
+----------------------------------------
+Aggressive: Avg=0.01%, Std=0.53%, Count=6.0
+Conservative: Avg=0.05%, Std=0.65%, Count=6.0
+Moderate: Avg=-0.15%, Std=0.93%, Count=6.0

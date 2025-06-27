@@ -26,10 +26,10 @@ class Config:
         
         self.CNN_KERNEL_SIZE = 3
         self.DENSE_UNITS = 64
-        self.DROPOUT_RATE = 0.4
+        self.DROPOUT_RATE = 0.3
         
         # Training Parameters
-        self.LEARNING_RATE = 0.00001
+        self.LEARNING_RATE = 0.001
         self.BATCH_SIZE = 32
         self.EPOCHS = 5
         self.EARLY_STOPPING_PATIENCE = 20
